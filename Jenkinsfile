@@ -74,56 +74,73 @@ pipeline {
             }
         }
 
-        stage('Push to Docker Hub') {
-            steps {
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DOCKERHUB_USER',
-                        passwordVariable: 'DOCKERHUB_TOKEN'
-                    )
-                ]) {
-                    powershell '''
-                        $ErrorActionPreference = "Stop"
+        
+stage('Push to Docker Hub') {
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'dockerhub-creds',
+                usernameVariable: 'DOCKERHUB_USER',
+                passwordVariable: 'DOCKERHUB_TOKEN'
+            )
+        ]) {
+            powershell '''
+                $ErrorActionPreference = "Continue"
 
-                        if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_USER)) {
-                            throw "Docker Hub username is empty."
-                        }
+                # Create a separate Docker configuration for this build.
+                $dockerConfig = Join-Path $env:WORKSPACE ".docker-auth-$env:BUILD_NUMBER"
 
-                        if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_TOKEN)) {
-                            throw "Docker Hub token is empty."
-                        }
+                New-Item -ItemType Directory -Force -Path $dockerConfig | Out-Null
 
-                        $token = $env:DOCKERHUB_TOKEN.Trim()
+                $env:DOCKER_CONFIG = $dockerConfig
 
-                        $token | docker login `
-                            --username $env:DOCKERHUB_USER `
-                            --password-stdin
+                try {
+                    Write-Host "Using isolated Docker configuration."
+                    Write-Host "Docker username: $env:DOCKERHUB_USER"
 
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Docker Hub authentication failed."
-                        }
+                    if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_TOKEN)) {
+                        throw "Jenkins Docker Hub token is empty."
+                    }
 
-                        Write-Host "Docker Hub authentication successful."
+                    # Authenticate using Jenkins credentials.
+                    $token = $env:DOCKERHUB_TOKEN.Trim()
 
-                        $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
+                    $token | docker login `
+                        --username $env:DOCKERHUB_USER `
+                        --password-stdin
 
-                        Write-Host "Pushing image: $image"
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Docker Hub authentication failed."
+                    }
 
-                        docker push $image
+                    Write-Host "Docker Hub authentication successful."
 
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Docker image push failed."
-                        }
+                    # Push the image.
+                    $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
 
-                        Write-Host "Docker image pushed successfully."
+                    Write-Host "Pushing image: $image"
 
-                        docker logout | Out-Null
-                    '''
+                    docker push $image
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Docker image push failed."
+                    }
+
+                    Write-Host "Docker image pushed successfully."
                 }
-            }
-        }
+                finally {
+                    # Remove temporary registry credentials.
+                    docker logout 2>$null | Out-Null
 
+                    Remove-Item -Path $dockerConfig `
+                        -Recurse -Force -ErrorAction SilentlyContinue
+
+                    Write-Host "Temporary Docker credentials cleaned up."
+                }
+            '''
+        }
+    }
+}
         stage('Deploy to Kubernetes') {
             steps {
                 withCredentials([
