@@ -9,10 +9,43 @@ import threading
 from datetime import date, datetime, timezone
 
 from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 
 APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
+
+# Security response headers for a JSON-only API (Activity 9, OWASP ZAP
+# findings 10021 / 10038): no MIME sniffing, no framing, no active content.
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+
+
+@app.after_request
+def add_security_headers(response):
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
+
+
+@app.errorhandler(HTTPException)
+def handle_http_error(error):
+    # JSON error bodies instead of Flask's default HTML pages (ZAP 100001),
+    # without echoing request data back to the client.
+    return jsonify({"error": error.name, "status": error.code}), error.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(error):
+    # Never leak stack traces or exception details to clients.
+    app.logger.exception("Unhandled error")
+    return jsonify({"error": "Internal Server Error", "status": 500}), 500
 
 MAX_PATIENT_NAME_LENGTH = 100
 
@@ -129,4 +162,6 @@ def create_appointment():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # Local development only; containers run Gunicorn (see Dockerfile).
+    # Bind to loopback by default (Semgrep avoid_app_run_with_bad_host).
+    app.run(host=os.getenv("FLASK_RUN_HOST", "127.0.0.1"), port=5000)

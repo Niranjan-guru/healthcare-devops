@@ -159,3 +159,36 @@ def test_environment_selectors_are_disjoint(deployment):
     ]
     environments = [sel["environment"] for sel in selectors]
     assert sorted(environments) == ["blue", "green", "rolling"]
+
+
+# ---- Activity 9: Kubernetes hardening (Trivy KSV findings) ---------------------
+
+ALL_DEPLOYMENTS = ["deployment.yaml", "blue-green/deployment-blue.yaml", "blue-green/deployment-green.yaml"]
+
+
+@pytest.mark.parametrize("name", ALL_DEPLOYMENTS)
+def test_pod_level_hardening(name):
+    pod = load(name)["spec"]["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    security = pod["securityContext"]
+    assert security["runAsNonRoot"] is True
+    assert security["runAsUser"] == 10001
+    assert security["runAsGroup"] == 10001
+    assert security["seccompProfile"] == {"type": "RuntimeDefault"}
+    for forbidden in ("hostNetwork", "hostPID", "hostIPC"):
+        assert not pod.get(forbidden, False)
+    for volume in pod.get("volumes", []):
+        assert "hostPath" not in volume
+
+
+@pytest.mark.parametrize("name", ALL_DEPLOYMENTS)
+def test_container_read_only_root_with_tmp_scratch(name):
+    pod = load(name)["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    security = container["securityContext"]
+    assert security["readOnlyRootFilesystem"] is True
+    assert security["seccompProfile"] == {"type": "RuntimeDefault"}
+    assert not security.get("privileged", False)
+    assert {"name": "tmp", "mountPath": "/tmp"} in container["volumeMounts"]
+    tmp = next(v for v in pod["volumes"] if v["name"] == "tmp")
+    assert tmp["emptyDir"]["medium"] == "Memory"
