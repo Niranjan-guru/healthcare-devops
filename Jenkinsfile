@@ -73,74 +73,37 @@ pipeline {
                 '''
             }
         }
+        stage('Docker credential Fingerprint Test') {
+            steps{
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKERHUB_USER',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]){
+                    powershell '''
+                        $token = $env:DOCKERHUB_TOKEN.Trim()
 
-        
-stage('Push to Docker Hub') {
-    steps {
-        withCredentials([
-            usernamePassword(
-                credentialsId: 'dockerhub-creds',
-                usernameVariable: 'DOCKERHUB_USER',
-                passwordVariable: 'DOCKERHUB_TOKEN'
-            )
-        ]) {
-            powershell '''
-                $ErrorActionPreference = "Continue"
+                        $bytes = [System.Text.Encoding]::UTF8.GetBytes($token)
+                        $sha = [System.Security.Cryptography.SHA256]::Create()
 
-                # Create a separate Docker configuration for this build.
-                $dockerConfig = Join-Path $env:WORKSPACE ".docker-auth-$env:BUILD_NUMBER"
+                        try{
+                            $hash = [BitConverter]::ToString(
+                                $sha.ComputeHash($bytes)
+                            ).Replace("-","")
 
-                New-Item -ItemType Directory -Force -Path $dockerConfig | Out-Null
-
-                $env:DOCKER_CONFIG = $dockerConfig
-
-                try {
-                    Write-Host "Using isolated Docker configuration."
-                    Write-Host "Docker username: $env:DOCKERHUB_USER"
-
-                    if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_TOKEN)) {
-                        throw "Jenkins Docker Hub token is empty."
-                    }
-
-                    # Authenticate using Jenkins credentials.
-                    $token = $env:DOCKERHUB_TOKEN.Trim()
-
-                    $token | docker login `
-                        --username $env:DOCKERHUB_USER `
-                        --password-stdin
-
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Docker Hub authentication failed."
-                    }
-
-                    Write-Host "Docker Hub authentication successful."
-
-                    # Push the image.
-                    $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
-
-                    Write-Host "Pushing image: $image"
-
-                    docker push $image
-
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Docker image push failed."
-                    }
-
-                    Write-Host "Docker image pushed successfully."
+                            Write-Host "Jenkins username: $env:DOCKERHUB_USER"
+                            Write-Host "Jenkins token length: $($token.Length)"
+                            Write-Host "Jenkins token fingerprint: $($hash.Substring(0,12))"
+                        }
+                        finally{
+                            $sha.Dispose()
+                        }
+                    '''
                 }
-                finally {
-                    # Remove temporary registry credentials.
-                    docker logout 2>$null | Out-Null
-
-                    Remove-Item -Path $dockerConfig `
-                        -Recurse -Force -ErrorAction SilentlyContinue
-
-                    Write-Host "Temporary Docker credentials cleaned up."
-                }
-            '''
+            }
         }
-    }
-}
         stage('Deploy to Kubernetes') {
             steps {
                 withCredentials([
