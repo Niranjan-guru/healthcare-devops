@@ -9,7 +9,7 @@ pipeline {
 
     environment {
         IMAGE_REPO = 'niranjanbalaguru/healthcare-app'
-        EC2_HOST   = '18.234.149.150'
+        EC2_HOST   = '184.73.3.54'
         REMOTE_DIR = '/tmp/healthcare-k8s'
     }
 
