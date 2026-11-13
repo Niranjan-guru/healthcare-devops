@@ -98,8 +98,12 @@ kc -n "$NS" rollout status "deployment/$DEPLOY" --timeout="$ROLLOUT_TIMEOUT" \
 spec_image=$(kc -n "$NS" get deployment "$DEPLOY" -o jsonpath="{.spec.template.spec.containers[?(@.name==\"$CONTAINER\")].image}")
 [[ "$spec_image" == "$IMAGE" ]] || fail "deployment spec image is $spec_image, expected $IMAGE"
 
-read -r desired ready updated available < <(kc -n "$NS" get deployment "$DEPLOY" \
-  -o jsonpath='{.spec.replicas} {.status.readyReplicas} {.status.updatedReplicas} {.status.availableReplicas}')
+# Here-string (not process substitution): jsonpath output has no trailing
+# newline, which makes `read` return 1 and abort the script under set -e.
+replica_status=$(kc -n "$NS" get deployment "$DEPLOY" \
+  -o jsonpath='{.spec.replicas} {.status.readyReplicas} {.status.updatedReplicas} {.status.availableReplicas}') \
+  || fail "could not read deployment status"
+read -r desired ready updated available <<< "$replica_status"
 log "deployment replicas desired=$desired ready=$ready updated=$updated available=$available"
 [[ "$desired" -eq "$EXPECTED_REPLICAS" ]] || fail "deployment wants $desired replicas, expected $EXPECTED_REPLICAS"
 [[ "${ready:-0}" -eq "$EXPECTED_REPLICAS" && "${updated:-0}" -eq "$EXPECTED_REPLICAS" && "${available:-0}" -eq "$EXPECTED_REPLICAS" ]] \

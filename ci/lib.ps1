@@ -41,7 +41,17 @@ function Invoke-Native {
             if (-not $Quiet) { Write-Host $line }
         }
         if ($PSBoundParameters.ContainsKey('InputText')) {
-            $InputText | & $FilePath @ArgumentList 2>&1 | ForEach-Object $handler
+            # The Jenkins powershell wrapper sets [Console]::InputEncoding to
+            # UTF8 *with* BOM; .NET then writes EF BB BF to the child's stdin
+            # before our text (this corrupted `docker login --password-stdin`).
+            # Use BOM-less UTF-8 while piping, then restore the setting.
+            $savedInputEncoding = [Console]::InputEncoding
+            [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+            try {
+                $InputText | & $FilePath @ArgumentList 2>&1 | ForEach-Object $handler
+            } finally {
+                [Console]::InputEncoding = $savedInputEncoding
+            }
         } else {
             & $FilePath @ArgumentList 2>&1 | ForEach-Object $handler
         }
