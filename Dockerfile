@@ -7,6 +7,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Apply available Debian security updates to the base image packages
+# (Activity 9: Trivy reported fixable HIGH findings, e.g. apt and zlib1g).
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY app/requirements.txt .
@@ -26,6 +32,10 @@ COPY pytest.ini .
 COPY app/ app/
 COPY tests/ tests/
 COPY k8s/ k8s/
+
+# Tests do not need root either (Semgrep dockerfile.security.missing-user).
+RUN useradd --create-home --uid 10001 tester
+USER 10001
 
 CMD ["python", "-m", "pytest", "-v", "-p", "no:cacheprovider"]
 

@@ -142,3 +142,46 @@ def test_unknown_doctor_returns_404(client):
     })
     assert response.status_code == 404
     assert response.get_json() == {"error": "Doctor not found"}
+
+
+# ---- Activity 9: security hardening (DAST / SAST findings) -------------------
+
+@pytest.mark.parametrize("path", ["/", "/health", "/version", "/api/doctors", "/api/appointments"])
+def test_security_headers_present(client, path):
+    response = client.get(path)
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_unknown_route_returns_json_404_without_reflection(client):
+    response = client.get("/does-not-exist/<script>alert(1)</script>")
+    assert response.status_code == 404
+    assert response.mimetype == "application/json"
+    assert response.get_json() == {"error": "Not Found", "status": 404}
+    assert b"<script>" not in response.data
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_wrong_method_returns_json_405(client):
+    response = client.delete("/api/doctors")
+    assert response.status_code == 405
+    assert response.mimetype == "application/json"
+    assert response.get_json()["status"] == 405
+
+
+def test_unexpected_errors_do_not_leak_details(client, monkeypatch):
+    def boom():
+        raise RuntimeError("internal secret detail")
+
+    monkeypatch.setitem(app_module.app.view_functions, "get_doctors", boom)
+    app_module.app.config.update(PROPAGATE_EXCEPTIONS=False)
+    try:
+        response = client.get("/api/doctors")
+    finally:
+        app_module.app.config.update(PROPAGATE_EXCEPTIONS=None)
+    assert response.status_code == 500
+    assert response.get_json() == {"error": "Internal Server Error", "status": 500}
+    assert b"internal secret detail" not in response.data

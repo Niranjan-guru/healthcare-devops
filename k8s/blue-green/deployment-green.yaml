@@ -31,6 +31,22 @@ spec:
         environment: green
 
     spec:
+      # Least privilege: the app never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        # Writable scratch space for Gunicorn worker heartbeats; the root
+        # filesystem itself is read-only.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
       containers:
         - name: healthcare-app
           # The blue-green pipeline replaces this tag (and the replica count)
@@ -73,10 +89,18 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
 
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
+            runAsGroup: 10001
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop:
                 - ALL
