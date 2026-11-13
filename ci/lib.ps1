@@ -48,6 +48,11 @@ function Invoke-Native {
         $exitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
+        # The exit code has been captured and is judged by the caller. Reset
+        # it so an *expected* non-zero code (e.g. `git grep` finding nothing)
+        # does not leak out as the Jenkins powershell step's exit status.
+        # Genuine failures are raised with `throw`, which still fails the step.
+        $global:LASTEXITCODE = 0
     }
     if ($null -eq $exitCode) { $exitCode = -1 }
     return [pscustomobject]@{ ExitCode = $exitCode; Output = $buffer.ToArray() }
