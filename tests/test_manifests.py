@@ -39,7 +39,7 @@ def test_deployment_identity_and_strategy(deployment):
     spec = deployment["spec"]
     assert spec["replicas"] == 2
     assert spec["strategy"]["type"] == "RollingUpdate"
-    assert spec["selector"]["matchLabels"] == {"app": "healthcare"}
+    assert spec["selector"]["matchLabels"] == {"app": "healthcare", "environment": "rolling"}
     assert spec["template"]["metadata"]["labels"]["app"] == "healthcare"
 
 
@@ -71,13 +71,91 @@ def test_container_security_context(container):
     assert security["capabilities"]["drop"] == ["ALL"]
 
 
-def test_service_manifest():
+def test_rolling_service_manifest():
     service = load("service.yaml")
     assert service["kind"] == "Service"
-    assert service["metadata"]["name"] == "healthcare-service"
+    assert service["metadata"]["name"] == "healthcare-rolling-service"
     assert service["metadata"]["namespace"] == "healthcare"
     assert service["spec"]["type"] == "NodePort"
-    assert service["spec"]["selector"] == {"app": "healthcare"}
+    assert service["spec"]["selector"] == {"app": "healthcare", "environment": "rolling"}
     port = service["spec"]["ports"][0]
     assert port["targetPort"] == 5000
-    assert port["nodePort"] == 30060
+    assert port["nodePort"] == 30061
+
+
+def test_rolling_deployment_selects_only_rolling_pods(deployment):
+    selector = deployment["spec"]["selector"]["matchLabels"]
+    assert selector == {"app": "healthcare", "environment": "rolling"}
+    assert deployment["spec"]["template"]["metadata"]["labels"] == selector
+
+
+# ---- Activity 8: blue-green ---------------------------------------------------
+
+ENVIRONMENTS = ("blue", "green")
+
+
+def bg(name):
+    return load(f"blue-green/{name}")
+
+
+@pytest.mark.parametrize("env", ENVIRONMENTS)
+def test_blue_green_deployment_labels_and_selector(env):
+    dep = bg(f"deployment-{env}.yaml")
+    assert dep["kind"] == "Deployment"
+    assert dep["metadata"]["name"] == f"healthcare-{env}"
+    assert dep["metadata"]["namespace"] == "healthcare"
+    expected = {"app": "healthcare", "environment": env}
+    assert dep["spec"]["selector"]["matchLabels"] == expected
+    assert dep["spec"]["template"]["metadata"]["labels"] == expected
+    assert dep["spec"]["replicas"] == 2
+    assert dep["spec"]["strategy"]["type"] == "RollingUpdate"
+
+
+def test_blue_and_green_pod_specs_are_identical():
+    blue = bg("deployment-blue.yaml")["spec"]["template"]["spec"]
+    green = bg("deployment-green.yaml")["spec"]["template"]["spec"]
+    assert blue == green
+
+
+def test_blue_green_pod_spec_matches_rolling_pod_spec(deployment):
+    # Same image settings, probes, resources and security context everywhere.
+    assert bg("deployment-blue.yaml")["spec"]["template"]["spec"] == deployment["spec"]["template"]["spec"]
+
+
+@pytest.mark.parametrize("env", ENVIRONMENTS)
+def test_blue_green_security_context(env):
+    container = bg(f"deployment-{env}.yaml")["spec"]["template"]["spec"]["containers"][0]
+    security = container["securityContext"]
+    assert security["runAsNonRoot"] is True
+    assert security["runAsUser"] == 10001
+    assert security["allowPrivilegeEscalation"] is False
+    assert security["capabilities"]["drop"] == ["ALL"]
+    assert container["readinessProbe"]["httpGet"]["path"] == "/health"
+    assert container["livenessProbe"]["httpGet"]["path"] == "/health"
+
+
+def test_production_service_routes_by_environment():
+    service = bg("service.yaml")
+    assert service["metadata"]["name"] == "healthcare-service"
+    assert service["spec"]["type"] == "NodePort"
+    assert service["spec"]["ports"][0]["nodePort"] == 30060
+    assert service["spec"]["ports"][0]["targetPort"] == 5000
+    selector = service["spec"]["selector"]
+    assert selector["app"] == "healthcare"
+    assert selector["environment"] in ENVIRONMENTS
+
+
+def test_preview_service_is_internal_only():
+    service = bg("service-preview.yaml")
+    assert service["metadata"]["name"] == "healthcare-preview-service"
+    assert service["spec"]["type"] == "ClusterIP"
+    assert "nodePort" not in service["spec"]["ports"][0]
+    assert service["spec"]["selector"]["environment"] in ENVIRONMENTS
+
+
+def test_environment_selectors_are_disjoint(deployment):
+    selectors = [deployment["spec"]["selector"]["matchLabels"]] + [
+        bg(f"deployment-{env}.yaml")["spec"]["selector"]["matchLabels"] for env in ENVIRONMENTS
+    ]
+    environments = [sel["environment"] for sel in selectors]
+    assert sorted(environments) == ["blue", "green", "rolling"]

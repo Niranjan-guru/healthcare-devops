@@ -12,3 +12,6 @@ __pycache__/
 .pytest_cache/
 venv/
 .venv/
+
+# Pipeline report/evidence output (archived by Jenkins, never committed)
+reports/
