@@ -5,6 +5,7 @@ pipeline {
     options {
         timestamps()
         disableConcurrentBuilds()
+        skipDefaultCheckout(true)
     }
 
     environment {
@@ -14,6 +15,7 @@ pipeline {
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -23,20 +25,25 @@ pipeline {
         stage('Validate Source') {
             steps {
                 powershell '''
-                    if (!(Test-Path "app/app.py")) {
-                        throw "Application source is missing"
+                    $ErrorActionPreference = "Stop"
+
+                    $requiredFiles = @(
+                        "app/app.py",
+                        "app/requirements.txt",
+                        "Dockerfile",
+                        "k8s/namespace.yaml",
+                        "k8s/deployment.yaml",
+                        "k8s/service.yaml"
+                    )
+
+                    foreach ($file in $requiredFiles) {
+                        if (!(Test-Path $file)) {
+                            throw "Required file missing: $file"
+                        }
+                        Write-Host "Verified: $file"
                     }
 
-                    if (!(Test-Path "Dockerfile")) {
-                        throw "Dockerfile is missing"
-                    }
-
-                    if (!(Test-Path "k8s/deployment.yaml")) {
-                        throw "Kubernetes Deployment manifest is missing"
-                    }
-
-                    python -m py_compile app/app.py
-                    Write-Host "Source validation passed"
+                    Write-Host "Source validation passed."
                 '''
             }
         }
@@ -48,62 +55,74 @@ pipeline {
                 }
 
                 powershell '''
+                    $ErrorActionPreference = "Stop"
+
                     $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
 
-                    docker build --build-arg APP_VERSION=$env:IMAGE_TAG -t $image .
+                    Write-Host "Building Docker image: $image"
+
+                    docker build `
+                        --build-arg "APP_VERSION=$env:IMAGE_TAG" `
+                        -t $image .
+
                     if ($LASTEXITCODE -ne 0) {
-                        throw "Docker image build failed"
+                        throw "Docker image build failed."
                     }
 
-                    Write-Host "Built image: $image"
+                    Write-Host "Docker image built successfully."
                 '''
             }
         }
 
-       
-stage('Push to Docker Hub') {
-    steps {
-    withCredentials([
-        usernamePassword(
-            credentialsId: 'dockerhub-creds',
-            usernameVariable: 'DOCKERHUB_USER',
-            passwordVariable: 'DOCKERHUB_TOKEN'
-        )
-    ]) {
-        powershell '''
-            $token = $env:DOCKERHUB_TOKEN.Trim()
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DOCKERHUB_USER',
+                        passwordVariable: 'DOCKERHUB_TOKEN'
+                    )
+                ]) {
+                    powershell '''
+                        $ErrorActionPreference = "Stop"
 
-            Write-Host "Username: $env:DOCKERHUB_USER"
-            Write-Host "Token length: $($token.Length)"
+                        if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_USER)) {
+                            throw "Docker Hub username is empty."
+                        }
 
-            if ($token.Length -ne 36) {
-                throw "Unexpected token length"
-            }
+                        if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_TOKEN)) {
+                            throw "Docker Hub token is empty."
+                        }
 
-            $token | docker login `
-                --username $env:DOCKERHUB_USER `
-                --password-stdin
+                        $token = $env:DOCKERHUB_TOKEN.Trim()
 
-            if ($LASTEXITCODE -ne 0) {
-                throw "Docker Hub authentication failed"
-            }
-        '''
-        }
-                Write-Host "Docker Hub authentication successful."
+                        $token | docker login `
+                            --username $env:DOCKERHUB_USER `
+                            --password-stdin
 
-                $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Docker Hub authentication failed."
+                        }
 
-                docker push $image
+                        Write-Host "Docker Hub authentication successful."
 
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Docker image push failed"
+                        $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
+
+                        Write-Host "Pushing image: $image"
+
+                        docker push $image
+
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Docker image push failed."
+                        }
+
+                        Write-Host "Docker image pushed successfully."
+
+                        docker logout | Out-Null
+                    '''
                 }
-
-                docker logout
-            '''
+            }
         }
-    }
-}
 
         stage('Deploy to Kubernetes') {
             steps {
@@ -115,39 +134,56 @@ stage('Push to Docker Hub') {
                     )
                 ]) {
                     powershell '''
+                        $ErrorActionPreference = "Stop"
+
                         $sshOptions = @(
                             "-i", $env:SSH_KEY,
-                            "-o", "StrictHostKeyChecking=accept-new"
+                            "-o", "StrictHostKeyChecking=accept-new",
+                            "-o", "BatchMode=yes"
                         )
 
-                        ssh @sshOptions "$($env:SSH_USER)@$($env:EC2_HOST)" `
-                            "mkdir -p $($env:REMOTE_DIR)"
+                        $remote = "$($env:SSH_USER)@$($env:EC2_HOST)"
+
+                        Write-Host "Checking SSH connectivity to EC2..."
+
+                        ssh @sshOptions $remote "echo SSH connection successful"
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Could not create remote manifest directory"
+                            throw "SSH connection to EC2 failed."
                         }
+
+                        ssh @sshOptions $remote "mkdir -p $($env:REMOTE_DIR)"
+
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Could not create remote manifest directory."
+                        }
+
+                        Write-Host "Transferring Kubernetes manifests..."
 
                         scp @sshOptions `
                             "k8s/namespace.yaml" `
                             "k8s/deployment.yaml" `
                             "k8s/service.yaml" `
-                            "$($env:SSH_USER)@$($env:EC2_HOST):$($env:REMOTE_DIR)/"
+                            "${remote}:$($env:REMOTE_DIR)/"
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Manifest transfer failed"
+                            throw "Kubernetes manifest transfer failed."
                         }
 
                         $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
+                        $version = $env:IMAGE_TAG
 
-                        $remoteCommand = "sudo kubectl apply -f $($env:REMOTE_DIR)/namespace.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/deployment.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/service.yaml && sudo kubectl set image deployment/healthcare-deployment healthcare-app=$image -n healthcare && sudo kubectl set env deployment/healthcare-deployment APP_VERSION=$image -n healthcare && sudo kubectl rollout status deployment/healthcare-deployment -n healthcare --timeout=180s && sudo kubectl get pods -n healthcare -o wide && sudo kubectl get svc -n healthcare"
+                        $remoteCommand = "sudo kubectl apply -f $($env:REMOTE_DIR)/namespace.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/deployment.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/service.yaml && sudo kubectl set image deployment/healthcare-deployment healthcare-app=$image -n healthcare && sudo kubectl set env deployment/healthcare-deployment APP_VERSION=$version -n healthcare && sudo kubectl rollout status deployment/healthcare-deployment -n healthcare --timeout=180s && sudo kubectl get pods -n healthcare -o wide && sudo kubectl get svc -n healthcare"
 
-                        ssh @sshOptions `
-                            "$($env:SSH_USER)@$($env:EC2_HOST)" `
-                            $remoteCommand
+                        Write-Host "Deploying image: $image"
+
+                        ssh @sshOptions $remote $remoteCommand
 
                         if ($LASTEXITCODE -ne 0) {
-                            throw "Kubernetes deployment or rollout verification failed"
+                            throw "Kubernetes deployment or rollout verification failed."
                         }
+
+                        Write-Host "Kubernetes deployment completed successfully."
                     '''
                 }
             }
@@ -156,11 +192,15 @@ stage('Push to Docker Hub') {
 
     post {
         success {
-            echo 'CI/CD pipeline completed successfully.'
+            echo 'SUCCESS: Healthcare CI/CD pipeline completed.'
         }
 
         failure {
-            echo 'CI/CD pipeline failed. Check the failed stage in the Jenkins console.'
+            echo 'FAILURE: Healthcare CI/CD pipeline failed. Inspect the failed stage.'
+        }
+
+        always {
+            echo 'Pipeline execution finished.'
         }
     }
 }
