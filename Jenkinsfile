@@ -63,35 +63,32 @@ pipeline {
        
 stage('Push to Docker Hub') {
     steps {
-        withCredentials([
-            usernamePassword(
-                credentialsId: 'dockerhub-creds',
-                usernameVariable: 'DOCKERHUB_USER',
-                passwordVariable: 'DOCKERHUB_TOKEN'
-            )
-        ]) {
-            powershell '''
-                Write-Host "Checking Jenkins Docker Hub credentials..."
+    withCredentials([
+        usernamePassword(
+            credentialsId: 'dockerhub-creds',
+            usernameVariable: 'DOCKERHUB_USER',
+            passwordVariable: 'DOCKERHUB_TOKEN'
+        )
+    ]) {
+        powershell '''
+            $token = $env:DOCKERHUB_TOKEN.Trim()
 
-                Write-Host "Username received: $env:DOCKERHUB_USER"
+            Write-Host "Username: $env:DOCKERHUB_USER"
+            Write-Host "Token length: $($token.Length)"
 
-                if ([string]::IsNullOrWhiteSpace($env:DOCKERHUB_TOKEN)) {
-                    throw "Docker Hub token is EMPTY inside Jenkins"
-                }
+            if ($token.Length -ne 36) {
+                throw "Unexpected token length"
+            }
 
-                $token = $env:DOCKERHUB_TOKEN.Trim()
+            $token | docker login `
+                --username $env:DOCKERHUB_USER `
+                --password-stdin
 
-                Write-Host "Token received: YES"
-                Write-Host "Token length: $($token.Length)"
-
-                $token | docker login `
-                    --username $env:DOCKERHUB_USER `
-                    --password-stdin
-
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Docker Hub authentication failed inside Jenkins"
-                }
-
+            if ($LASTEXITCODE -ne 0) {
+                throw "Docker Hub authentication failed"
+            }
+        '''
+        }
                 Write-Host "Docker Hub authentication successful."
 
                 $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
