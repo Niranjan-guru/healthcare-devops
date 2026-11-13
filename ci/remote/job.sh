@@ -20,6 +20,9 @@ LOG="$DIR/run.log"; CODE="$DIR/exit.code"; PIDF="$DIR/job.pid"
 case "$ACTION" in
   start)
     entry=$1; shift
+    # Idempotent: a retried start (after a lost SSH response) must never
+    # launch the operation twice.
+    if [[ -f "$PIDF" ]]; then echo "__STARTED__=$(cat "$PIDF") (already started)"; exit 0; fi
     : > "$LOG"
     setsid nohup bash -c 'bash "$1" "${@:2}" >>"$0" 2>&1; echo $? > "$0.code.tmp"; mv "$0.code.tmp" "'"$CODE"'"' \
       "$LOG" "$DIR/$entry" "$DIR" "$@" </dev/null >/dev/null 2>&1 &

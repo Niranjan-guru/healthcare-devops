@@ -249,6 +249,19 @@ function Invoke-Ssh {
     return $result
 }
 
+function Invoke-SshRetry {
+    # Retries ONLY ssh transport failures (exit 255: connection refused/reset,
+    # timeout). A real non-zero exit of the remote command is returned as is.
+    # Use only for idempotent remote commands.
+    param([Parameter(Mandatory)][string]$RemoteCommand, [int]$Attempts = 3, [switch]$Quiet)
+    for ($i = 1; $i -le $Attempts; $i++) {
+        $r = Invoke-Ssh -RemoteCommand $RemoteCommand -Quiet:$Quiet
+        if ($r.ExitCode -ne 255) { return $r }
+        if ($i -lt $Attempts) { Write-Host "(ssh transport failure, attempt $i/$Attempts; retrying in 10s)"; Start-Sleep -Seconds 10 }
+    }
+    return $r
+}
+
 function Invoke-RemoteBundle {
     <#
       Copies the given files (paths relative to $LocalDir) into a fresh
@@ -266,7 +279,7 @@ function Invoke-RemoteBundle {
     foreach ($value in $ScriptArguments) { Assert-SafeToken -Value $value -Name 'remote script argument' }
     if ($Files -notcontains 'job.sh') { $Files = @($Files) + 'job.sh' }
 
-    $mk = Invoke-Ssh -RemoteCommand 'mktemp -d /tmp/healthcare-ci.XXXXXXXXXX' -Quiet
+    $mk = Invoke-SshRetry -RemoteCommand 'mktemp -d /tmp/healthcare-ci.XXXXXXXXXX' -Quiet
     Assert-Success $mk 'Could not create a remote working directory over SSH'
     $remoteDir = $mk.Output | Where-Object { $_ -match '^/tmp/healthcare-ci\.[A-Za-z0-9]{10}$' } | Select-Object -Last 1
     if (-not $remoteDir) { throw 'Unexpected output from remote mktemp.' }
@@ -276,7 +289,11 @@ function Invoke-RemoteBundle {
         Push-Location -LiteralPath $LocalDir
         try {
             $scpArgs = (Get-SshOptions) + $Files + @("$(Get-SshTarget):$remoteDir/")
-            $copy = Invoke-Native -FilePath 'scp.exe' -ArgumentList $scpArgs
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+                $copy = Invoke-Native -FilePath 'scp.exe' -ArgumentList $scpArgs
+                if ($copy.ExitCode -eq 0) { break }
+                if ($attempt -lt 3) { Write-Host "(scp failed with exit $($copy.ExitCode), attempt $attempt/3; retrying in 10s)"; Start-Sleep -Seconds 10 }
+            }
             Assert-Success $copy 'Copying files to the EC2 host failed'
         } finally {
             Pop-Location
@@ -284,7 +301,8 @@ function Invoke-RemoteBundle {
 
         # Run detached on the EC2 host (see ci/remote/job.sh) so a dropped SSH
         # connection can neither kill the operation half-way nor lose its log.
-        $start = Invoke-Ssh -RemoteCommand ((@('bash', "$remoteDir/job.sh", $remoteDir, 'start', $EntryScript) + $ScriptArguments) -join ' ') -Quiet
+        # job.sh start is idempotent, so retrying after a lost response is safe.
+        $start = Invoke-SshRetry -RemoteCommand ((@('bash', "$remoteDir/job.sh", $remoteDir, 'start', $EntryScript) + $ScriptArguments) -join ' ') -Quiet
         Assert-Success $start "Could not start $EntryScript on the EC2 host"
 
         $output = New-Object System.Collections.Generic.List[string]
@@ -319,7 +337,7 @@ function Invoke-RemoteBundle {
         return [pscustomobject]@{ ExitCode = $exitCode; Output = $output.ToArray() }
     } finally {
         if ($finished) {
-            $cleanup = Invoke-Ssh -RemoteCommand "rm -rf -- $remoteDir" -Quiet
+            $cleanup = Invoke-SshRetry -RemoteCommand "rm -rf -- $remoteDir" -Quiet
             if ($cleanup.ExitCode -ne 0) { Write-Warning "Could not remove remote directory $remoteDir (exit $($cleanup.ExitCode))." }
         }
     }
