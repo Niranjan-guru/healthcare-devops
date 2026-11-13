@@ -292,30 +292,67 @@ function New-DeploymentBundle {
       (LF line endings, no BOM) and pins the Deployment to $Image.  Fails if
       the image line cannot be replaced exactly once.
     #>
-    param([Parameter(Mandatory)][string]$Destination, [Parameter(Mandatory)][string]$Image)
+    param(
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$Image,
+        [ValidateRange(1, 4)][int]$Replicas = 2,
+        [switch]$InjectReadinessFault
+    )
     Assert-SafeToken -Value $Image -Name 'image'
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
     New-Item -ItemType Directory -Path $Destination | Out-Null
 
-    $sources = @{
-        'namespace.yaml'  = 'k8s\namespace.yaml'
-        'service.yaml'    = 'k8s\service.yaml'
-        'deployment.yaml' = 'k8s\deployment.yaml'
-        'verify-host.sh'  = 'ci\remote\verify-host.sh'
-        'deploy.sh'       = 'ci\remote\deploy.sh'
-        'smoke-test.sh'   = 'ci\remote\smoke-test.sh'
+    $sources = [ordered]@{
+        'namespace.yaml'          = 'k8s\namespace.yaml'
+        'service.yaml'            = 'k8s\service.yaml'               # Activity 7 rolling Service
+        'deployment.yaml'         = 'k8s\deployment.yaml'            # Activity 7 rolling Deployment
+        'bg-service.yaml'         = 'k8s\blue-green\service.yaml'    # Activity 8 production Service
+        'service-preview.yaml'    = 'k8s\blue-green\service-preview.yaml'
+        'deployment-blue.yaml'    = 'k8s\blue-green\deployment-blue.yaml'
+        'deployment-green.yaml'   = 'k8s\blue-green\deployment-green.yaml'
+        'k8s-lib.sh'              = 'ci\remote\k8s-lib.sh'
+        'verify-host.sh'          = 'ci\remote\verify-host.sh'
+        'deploy.sh'               = 'ci\remote\deploy.sh'
+        'bluegreen.sh'            = 'ci\remote\bluegreen.sh'
+        'ns-lock.sh'              = 'ci\remote\ns-lock.sh'
+        'smoke-test.sh'           = 'ci\remote\smoke-test.sh'
     }
+    $imagePattern = '(?m)^(\s*image:\s*)niranjanbalaguru/healthcare-app:[^\s#]+[ \t]*\r?$'
     foreach ($name in $sources.Keys) {
-        $text = [IO.File]::ReadAllText((Join-Path $env:WORKSPACE $sources[$name]))
-        if ($name -eq 'deployment.yaml') {
-            $pattern = '(?m)^(\s*image:\s*)niranjanbalaguru/healthcare-app:[^\s#]+[ \t]*\r?$'
-            $found = [regex]::Matches($text, $pattern)
-            if ($found.Count -ne 1) { throw "Expected exactly one healthcare-app image line in k8s/deployment.yaml, found $($found.Count)." }
-            $text = [regex]::Replace($text, $pattern, ('${1}' + $Image))
+        $text = [IO.File]::ReadAllText((Join-Path $env:WORKSPACE $sources[$name])).Replace("`r`n", "`n")
+        if ($name -like 'deployment*.yaml') {
+            $found = [regex]::Matches($text, $imagePattern)
+            if ($found.Count -ne 1) { throw "Expected exactly one healthcare-app image line in $($sources[$name]), found $($found.Count)." }
+            $text = [regex]::Replace($text, $imagePattern, ('${1}' + $Image))
+        }
+        if ($name -in @('deployment-blue.yaml', 'deployment-green.yaml')) {
+            $replicaPattern = '(?m)^  replicas: \d+$'
+            if ([regex]::Matches($text, $replicaPattern).Count -ne 1) { throw "Expected one 'replicas:' line in $($sources[$name])." }
+            $text = [regex]::Replace($text, $replicaPattern, "  replicas: $Replicas")
+            if ($InjectReadinessFault) {
+                # NEGATIVE TEST ONLY: point the candidate's readiness probe at a
+                # path that returns 404 so the rollout genuinely never becomes
+                # Ready. Used to prove that a failed validation blocks promotion.
+                $probePattern = '(?s)(readinessProbe:\s*\n\s*httpGet:\s*\n\s*path:\s*)/health'
+                if ([regex]::Matches($text, $probePattern).Count -ne 1) { throw 'Could not locate the readiness probe path to inject the fault.' }
+                $text = [regex]::Replace($text, $probePattern, '${1}/simulated-readiness-failure')
+                $text = $text.Replace('    healthcare.pbl/role:', "    healthcare.pbl/fault-injection: `"readiness-probe (negative test)`"`n    healthcare.pbl/role:")
+            }
         }
         Write-Utf8NoBomLf -Path (Join-Path $Destination $name) -Text $text
     }
-    Write-Host "Deployment bundle rendered for image $Image"
+    Write-Host "Deployment bundle rendered for image $Image (blue/green replicas: $Replicas$(if ($InjectReadinessFault) { ', READINESS FAULT INJECTED for negative test' }))"
+}
+
+function Get-BundleFiles {
+    # Remote file sets per operation (paths relative to the bundle directory).
+    param([Parameter(Mandatory)][ValidateSet('lock', 'rolling', 'bluegreen', 'smoke')][string]$Kind)
+    switch ($Kind) {
+        'lock'      { return @('k8s-lib.sh', 'ns-lock.sh') }
+        'rolling'   { return @('k8s-lib.sh', 'deploy.sh', 'namespace.yaml', 'service.yaml', 'deployment.yaml') }
+        'bluegreen' { return @('k8s-lib.sh', 'bluegreen.sh', 'bg-service.yaml', 'service-preview.yaml', 'deployment-blue.yaml', 'deployment-green.yaml') }
+        'smoke'     { return @('smoke-test.sh') }
+    }
 }
 
 # ---------------------------------------------------------------------------

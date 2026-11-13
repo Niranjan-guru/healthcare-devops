@@ -1,26 +1,29 @@
 #!/usr/bin/env bash
-# Runs on the EC2 K3s node. Exercises the deployed application through the
-# Kubernetes Service NodePort on localhost, so no inbound port has to be
-# opened to the internet. Uses synthetic data only.
+# Runs on the EC2 K3s node. Exercises the deployed application through a
+# Kubernetes Service from the node itself (NodePort on localhost, or the
+# ClusterIP for internal services), so no inbound port has to be opened to
+# the internet. Uses synthetic data only.
 #
-# Usage: smoke-test.sh <workdir> <expected-version> <build-number>
+# Usage: smoke-test.sh <workdir> <expected-version> <build-number> <service-name>
 set -Eeuo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 <workdir> <expected-version> <build-number>" >&2
+if [[ $# -ne 4 ]]; then
+  echo "usage: $0 <workdir> <expected-version> <build-number> <service-name>" >&2
   exit 2
 fi
 WORKDIR=$1
 VERSION=$2
 BUILD=$3
-EXPECTED_NODE_PORT=30060
+SERVICE=$4
 
-node_port=$(sudo -n kubectl -n healthcare get service healthcare-service -o jsonpath='{.spec.ports[0].nodePort}')
-if [[ "$node_port" != "$EXPECTED_NODE_PORT" ]]; then
-  echo "[smoke] ERROR: service nodePort is '$node_port', expected $EXPECTED_NODE_PORT" >&2
-  exit 1
+svc_type=$(sudo -n kubectl -n healthcare get service "$SERVICE" -o jsonpath='{.spec.type}') \
+  || { echo "[smoke] ERROR: service $SERVICE not found" >&2; exit 1; }
+if [[ "$svc_type" == "NodePort" ]]; then
+  BASE="http://127.0.0.1:$(sudo -n kubectl -n healthcare get service "$SERVICE" -o jsonpath='{.spec.ports[0].nodePort}')"
+else
+  BASE="http://$(sudo -n kubectl -n healthcare get service "$SERVICE" -o jsonpath='{.spec.clusterIP}'):$(sudo -n kubectl -n healthcare get service "$SERVICE" -o jsonpath='{.spec.ports[0].port}')"
 fi
-BASE="http://127.0.0.1:$node_port"
+echo "[smoke] testing service $SERVICE ($svc_type) at $BASE, expecting version $VERSION"
 BODY="$WORKDIR/body.json"
 
 passed=0

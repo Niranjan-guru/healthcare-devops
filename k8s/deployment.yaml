@@ -8,9 +8,12 @@ metadata:
 spec:
   replicas: 2
 
+  # environment=rolling keeps this Activity 7 Deployment disjoint from the
+  # Activity 8 blue/green Deployments that share the namespace.
   selector:
     matchLabels:
       app: healthcare
+      environment: rolling
 
   strategy:
     type: RollingUpdate
@@ -22,6 +25,7 @@ spec:
     metadata:
       labels:
         app: healthcare
+        environment: rolling
 
     spec:
       containers:
