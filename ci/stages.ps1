@@ -35,7 +35,7 @@ function Test-SourceTree {
         'k8s/blue-green/deployment-blue.yaml', 'k8s/blue-green/deployment-green.yaml',
         'k8s/blue-green/service.yaml', 'k8s/blue-green/service-preview.yaml',
         'ci/lib.ps1', 'ci/stages.ps1', 'ci/remote/k8s-lib.sh', 'ci/remote/verify-host.sh',
-        'ci/remote/deploy.sh', 'ci/remote/bluegreen.sh', 'ci/remote/ns-lock.sh', 'ci/remote/smoke-test.sh'
+        'ci/remote/deploy.sh', 'ci/remote/bluegreen.sh', 'ci/remote/ns-lock.sh', 'ci/remote/smoke-test.sh', 'ci/remote/job.sh'
     )
     foreach ($file in $required) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Required file missing: $file" }

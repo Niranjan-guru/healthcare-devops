@@ -260,15 +260,18 @@ function Invoke-RemoteBundle {
         [Parameter(Mandatory)][string]$LocalDir,
         [Parameter(Mandatory)][string[]]$Files,
         [Parameter(Mandatory)][string]$EntryScript,
-        [string[]]$ScriptArguments = @()
+        [string[]]$ScriptArguments = @(),
+        [ValidateRange(1, 60)][int]$TimeoutMinutes = 30
     )
     foreach ($value in $ScriptArguments) { Assert-SafeToken -Value $value -Name 'remote script argument' }
+    if ($Files -notcontains 'job.sh') { $Files = @($Files) + 'job.sh' }
 
     $mk = Invoke-Ssh -RemoteCommand 'mktemp -d /tmp/healthcare-ci.XXXXXXXXXX' -Quiet
     Assert-Success $mk 'Could not create a remote working directory over SSH'
     $remoteDir = $mk.Output | Where-Object { $_ -match '^/tmp/healthcare-ci\.[A-Za-z0-9]{10}$' } | Select-Object -Last 1
     if (-not $remoteDir) { throw 'Unexpected output from remote mktemp.' }
 
+    $finished = $false
     try {
         Push-Location -LiteralPath $LocalDir
         try {
@@ -278,11 +281,47 @@ function Invoke-RemoteBundle {
         } finally {
             Pop-Location
         }
-        $command = (@('bash', "$remoteDir/$EntryScript", $remoteDir) + $ScriptArguments) -join ' '
-        return (Invoke-Ssh -RemoteCommand $command)
+
+        # Run detached on the EC2 host (see ci/remote/job.sh) so a dropped SSH
+        # connection can neither kill the operation half-way nor lose its log.
+        $start = Invoke-Ssh -RemoteCommand ((@('bash', "$remoteDir/job.sh", $remoteDir, 'start', $EntryScript) + $ScriptArguments) -join ' ') -Quiet
+        Assert-Success $start "Could not start $EntryScript on the EC2 host"
+
+        $output = New-Object System.Collections.Generic.List[string]
+        $nextLine = 1; $exitCode = $null; $failedPolls = 0
+        $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        while ($null -eq $exitCode) {
+            if ((Get-Date) -gt $deadline) {
+                Invoke-Ssh -RemoteCommand "bash $remoteDir/job.sh $remoteDir stop" -Quiet | Out-Null
+                throw "$EntryScript did not finish within $TimeoutMinutes minutes; it was stopped."
+            }
+            $poll = Invoke-Ssh -RemoteCommand "bash $remoteDir/job.sh $remoteDir poll $nextLine" -Quiet
+            if ($poll.ExitCode -ne 0) {
+                $failedPolls++
+                if ($failedPolls -ge 6) { throw "Lost contact with the EC2 host while $EntryScript was running ($failedPolls consecutive failed polls); the operation continues detached on the host - inspect $remoteDir there." }
+                Write-Host "(poll failed with exit $($poll.ExitCode); retry $failedPolls/6 - the remote operation keeps running)"
+                Start-Sleep -Seconds 5
+                continue
+            }
+            $failedPolls = 0
+            foreach ($line in $poll.Output) {
+                if ($line -match '^__LINES__=(\d+)$') { $nextLine = [int]$Matches[1] + 1 }
+                elseif ($line -match '^(.*)__EXIT__=(\d+)$') {
+                    # Defensive: text glued in front of the marker is still log output.
+                    if ($Matches[1]) { Write-Host $Matches[1]; $output.Add($Matches[1]) }
+                    $exitCode = [int]$Matches[2]
+                }
+                else { Write-Host $line; $output.Add($line) }
+            }
+            if ($null -eq $exitCode) { Start-Sleep -Seconds 5 }
+        }
+        $finished = $true
+        return [pscustomobject]@{ ExitCode = $exitCode; Output = $output.ToArray() }
     } finally {
-        $cleanup = Invoke-Ssh -RemoteCommand "rm -rf -- $remoteDir" -Quiet
-        if ($cleanup.ExitCode -ne 0) { Write-Warning "Could not remove remote directory $remoteDir (exit $($cleanup.ExitCode))." }
+        if ($finished) {
+            $cleanup = Invoke-Ssh -RemoteCommand "rm -rf -- $remoteDir" -Quiet
+            if ($cleanup.ExitCode -ne 0) { Write-Warning "Could not remove remote directory $remoteDir (exit $($cleanup.ExitCode))." }
+        }
     }
 }
 
@@ -316,6 +355,7 @@ function New-DeploymentBundle {
         'bluegreen.sh'            = 'ci\remote\bluegreen.sh'
         'ns-lock.sh'              = 'ci\remote\ns-lock.sh'
         'smoke-test.sh'           = 'ci\remote\smoke-test.sh'
+        'job.sh'                  = 'ci\remote\job.sh'
     }
     $imagePattern = '(?m)^(\s*image:\s*)niranjanbalaguru/healthcare-app:[^\s#]+[ \t]*\r?$'
     foreach ($name in $sources.Keys) {
