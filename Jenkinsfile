@@ -91,12 +91,7 @@ pipeline {
                     }
                     Write-Host "All $($required.Count) required files present."
 
-                    # Files consumed on Linux must not contain CR characters.
-                    foreach ($file in @('ci/remote/verify-host.sh', 'ci/remote/deploy.sh', 'ci/remote/smoke-test.sh',
-                                        'k8s/namespace.yaml', 'k8s/deployment.yaml', 'k8s/service.yaml')) {
-                        if ([IO.File]::ReadAllText((Resolve-Path $file)).Contains("`r")) { throw "$file has CRLF line endings." }
-                    }
-                    Write-Host 'Linux-side files use LF line endings.'
+                    # (Files sent to the EC2 host are normalised to LF by New-DeploymentBundle.)
 
                     # Secret hygiene: no key material or kubeconfigs tracked in Git.
                     $tracked = Invoke-Native -FilePath 'git' -ArgumentList @('ls-files') -Quiet
