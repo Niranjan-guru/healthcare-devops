@@ -32,6 +32,7 @@ COPY pytest.ini .
 COPY app/ app/
 COPY tests/ tests/
 COPY k8s/ k8s/
+COPY ci/security/ ci/security/
 
 # Tests do not need root either (Semgrep dockerfile.security.missing-user).
 RUN useradd --create-home --uid 10001 tester

@@ -21,3 +21,5 @@ kubeconfig
 # CI/CD tooling is not needed inside the image
 Jenkinsfile
 ci/
+# ...except the security gate, which the test stage unit-tests
+!ci/security/
