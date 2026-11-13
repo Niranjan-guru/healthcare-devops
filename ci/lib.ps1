@@ -312,9 +312,34 @@ function New-DeploymentBundle {
 # Docker Hub registry API (verifies what is actually stored in Docker Hub)
 # ---------------------------------------------------------------------------
 
+function Get-DockerHubToken {
+    <#
+      Returns the Docker Hub access token from the Jenkins credential with
+      surrounding whitespace removed (a stored trailing newline/space corrupts
+      `docker login --password-stdin`, which strips only one trailing "\n").
+      With -ShowDiagnostics it logs non-secret facts only: length, whether
+      whitespace was trimmed, and a 12-hex-char SHA-256 prefix for comparing
+      with earlier builds.
+    #>
+    param([switch]$ShowDiagnostics)
+    $rawToken = [string]$env:DOCKERHUB_PSW
+    $token = $rawToken.Trim()
+    if (-not $token) { throw "Credential 'dockerhub-creds' has an empty password/token." }
+    if ($token -match '\s') { throw "Credential 'dockerhub-creds' token contains internal whitespace; re-enter the access token." }
+    if ($ShowDiagnostics) {
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($token))).Replace('-', '')
+        } finally { $sha.Dispose() }
+        Write-Host ("Docker Hub token diagnostics: length={0}, surrounding whitespace trimmed={1}, sha256 prefix={2}" -f `
+            $token.Length, ($rawToken.Length -ne $token.Length), $hash.Substring(0, 12).ToLowerInvariant())
+    }
+    return $token
+}
+
 function Get-DockerHubDigest {
     param([Parameter(Mandatory)][string]$Repository, [Parameter(Mandatory)][string]$Tag)
-    $pair = "$($env:DOCKERHUB_USR):$($env:DOCKERHUB_PSW)"
+    $pair = "$($env:DOCKERHUB_USR.Trim()):$(Get-DockerHubToken)"
     $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($pair))
     $tokenUri = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${Repository}:pull"
     $tokenResponse = Invoke-RestMethod -Uri $tokenUri -Headers @{ Authorization = "Basic $basic" } -TimeoutSec 30

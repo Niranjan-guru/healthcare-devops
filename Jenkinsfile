@@ -216,8 +216,11 @@ pipeline {
                             . "$env:WORKSPACE/ci/lib.ps1"
                             New-Item -ItemType Directory -Force -Path $env:DOCKER_CONFIG | Out-Null
                             Protect-PrivatePath -Path $env:DOCKER_CONFIG -Directory
-                            if ($env:DOCKERHUB_USR -cne 'niranjanbalaguru') { throw "Credential 'dockerhub-creds' does not hold the expected Docker Hub username." }
-                            $login = Invoke-Native -FilePath 'docker' -ArgumentList @('login', '--username', $env:DOCKERHUB_USR, '--password-stdin') -InputText $env:DOCKERHUB_PSW
+                            $user = $env:DOCKERHUB_USR.Trim()
+                            if ($user -cne 'niranjanbalaguru') { throw "Credential 'dockerhub-creds' does not hold the expected Docker Hub username." }
+                            $token = Get-DockerHubToken -ShowDiagnostics
+                            $login = Invoke-Native -FilePath 'docker' -ArgumentList @('login', '--username', $user, '--password-stdin') -InputText $token
+                            Remove-Variable token
                             Assert-Success $login "Docker Hub authentication failed - check that credential 'dockerhub-creds' holds a valid Read/Write access token"
                             if (-not (Test-Path -LiteralPath (Join-Path $env:DOCKER_CONFIG 'config.json'))) { throw 'docker login did not use the isolated DOCKER_CONFIG.' }
                             Write-Host 'Authenticated to Docker Hub using an isolated, temporary Docker config.'
