@@ -1,10 +1,23 @@
 __pycache__
+**/__pycache__
 *.pyc
 *.pyo
 *.pyd
 .Python
 venv/
+.venv/
 .env
 .git/
 .gitignore
+.gitattributes
 .pytest_cache/
+**/.pytest_cache
+
+# Never send secrets to the Docker daemon build context
+*.pem
+*.key
+kubeconfig
+
+# CI/CD tooling is not needed inside the image
+Jenkinsfile
+ci/

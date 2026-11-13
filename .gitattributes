@@ -1,0 +1,9 @@
+* text=auto
+# Files executed or parsed on Linux must keep LF line endings even when the
+# Windows Jenkins agent checks them out with core.autocrlf=true.
+*.sh      text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.py      text eol=lf
+Dockerfile text eol=lf
+*.ps1     text eol=crlf

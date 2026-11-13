@@ -26,6 +26,9 @@ spec:
     spec:
       containers:
         - name: healthcare-app
+          # The Jenkins pipeline replaces this tag with the exact image tag of
+          # the current build before applying. APP_VERSION is baked into the
+          # image at build time, so the image is the single source of truth.
           image: niranjanbalaguru/healthcare-app:1.0.0
           imagePullPolicy: IfNotPresent
 
@@ -35,8 +38,6 @@ spec:
               protocol: TCP
 
           env:
-            - name: APP_VERSION
-              value: "1.0.0"
             - name: PYTHONUNBUFFERED
               value: "1"
 
