@@ -1,0 +1,177 @@
+# Release security policy for the Healthcare DevSecOps pipeline (Activity 9).
+# Evaluated by ci/security/evaluate_policy.py. Human-readable rationale:
+# docs/security-policy.md.
+#
+# A finding with a severity listed under `block` fails the build unless an
+# exception below matches it EXACTLY (control + finding id + severity, and
+# package where given), carries every required field, and has not expired.
+# Blanket exceptions ("*", "ALL") are rejected by the evaluator.
+version: 1
+
+gates:
+  secrets:        # Gitleaks - any detected secret blocks the release
+    block_any: true
+  sast:           # Semgrep severities: ERROR / WARNING / INFO
+    block: [ERROR]
+  dependencies:   # pip-audit - every known vulnerability in a pinned dependency blocks
+    block_any: true
+  container:      # Trivy image severities
+    block: [CRITICAL, HIGH]
+  dockerfile:     # Trivy misconfiguration severities
+    block: [CRITICAL, HIGH]
+  kubernetes:
+    block: [CRITICAL, HIGH]
+  dast:           # OWASP ZAP risk levels: High / Medium / Low / Informational
+    block: [High]
+
+# Approved exceptions. Each entry needs: id, control, severity, (packages),
+# reason, mitigation, owner, approved_by, approved_on, expires.
+# The 11 entries below cover HIGH OS-package CVEs in the python:3.12-slim
+# (Debian 13.7) base for which Debian has published NO fix. They were
+# approved explicitly by the project owner on 2026-11-14 after reviewing
+# the exploitability analysis in docs/security-policy.md. Any other HIGH or
+# CRITICAL finding - or these CVEs in any other package - still blocks.
+exceptions:
+  - id: CVE-2025-69720
+    control: container
+    severity: HIGH
+    packages: [libncursesw6, libtinfo6, ncurses-base, ncurses-bin]
+    summary: "ncurses: ncurses: Buffer overflow vulnerability may lead to arbitrary code execution."
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Buffer overflow in ncurses terminfo handling. The application has no terminal UI and never loads curses.
+    mitigation: >-
+      No TTY is allocated to the pods; non-root, read-only root filesystem, capabilities dropped. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-119373
+    control: container
+    severity: HIGH
+    packages: [libsqlite3-0]
+    summary: "sqlite: sqlite: Denial of service via heap-based buffer overflow in FTS5"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in SQLite FTS5 / session extensions. The application stores synthetic data in memory and never opens a SQLite database.
+    mitigation: >-
+      No SQL or database input reachable from the API; non-root, read-only root filesystem. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-119374
+    control: container
+    severity: HIGH
+    packages: [libsqlite3-0]
+    summary: "sqlite: sqlite: Arbitrary code execution via corrupted FTS5 index"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in SQLite FTS5 / session extensions. The application stores synthetic data in memory and never opens a SQLite database.
+    mitigation: >-
+      No SQL or database input reachable from the API; non-root, read-only root filesystem. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-119379
+    control: container
+    severity: HIGH
+    packages: [libsqlite3-0]
+    summary: "sqlite: sqlite: Arbitrary code execution via crafted session changesets"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in SQLite FTS5 / session extensions. The application stores synthetic data in memory and never opens a SQLite database.
+    mitigation: >-
+      No SQL or database input reachable from the API; non-root, read-only root filesystem. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-16742
+    control: container
+    severity: HIGH
+    packages: [libsystemd0, libudev1]
+    summary: "systemd: systemd-homed: Local privilege escalation via missing home-record signature verification"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). systemd-homed privilege escalation affecting the systemd libraries. No systemd/homed service runs inside the container.
+    mitigation: >-
+      Container has no init system or homed daemon; non-root, capabilities dropped, no privilege escalation. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-54369
+    control: container
+    severity: HIGH
+    packages: [libacl1]
+    summary: "acl: Symlink traversal privilege escalation via libacl functions"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Symlink traversal in libacl functions used by privileged file tools. No privileged process in the container uses libacl on attacker-controlled paths.
+    mitigation: >-
+      Non-root UID 10001, capabilities dropped, read-only root filesystem, no file-upload or path input in the API. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-76642
+    control: container
+    severity: HIGH
+    packages: [bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux]
+    summary: "util-linux: util-linux: failed external mount helper still runs privileged X-mount post-hooks"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in mount helpers / nsenter (util-linux). The application never executes mount, nsenter or other util-linux tools; they are inert files in the base image.
+    mitigation: >-
+      Container runs as UID 10001 with all Linux capabilities dropped, allowPrivilegeEscalation=false (no_new_privs, so setuid binaries cannot gain privileges), read-only root filesystem and seccomp RuntimeDefault; no shell or exec endpoint is exposed. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-78408
+    control: container
+    severity: HIGH
+    packages: [bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux]
+    summary: "util-linux: util-linux: nsenter --join-cgroup leaks root cgroup migration authority"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in mount helpers / nsenter (util-linux). The application never executes mount, nsenter or other util-linux tools; they are inert files in the base image.
+    mitigation: >-
+      Container runs as UID 10001 with all Linux capabilities dropped, allowPrivilegeEscalation=false (no_new_privs, so setuid binaries cannot gain privileges), read-only root filesystem and seccomp RuntimeDefault; no shell or exec endpoint is exposed. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-78409
+    control: container
+    severity: HIGH
+    packages: [bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux]
+    summary: "util-linux: util-linux: X-mount.subdir detached-tree resolution can escape via intermediate symlinks"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in mount helpers / nsenter (util-linux). The application never executes mount, nsenter or other util-linux tools; they are inert files in the base image.
+    mitigation: >-
+      Container runs as UID 10001 with all Linux capabilities dropped, allowPrivilegeEscalation=false (no_new_privs, so setuid binaries cannot gain privileges), read-only root filesystem and seccomp RuntimeDefault; no shell or exec endpoint is exposed. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-78410
+    control: container
+    severity: HIGH
+    packages: [bsdutils, libblkid1, liblastlog2-2, libmount1, libsmartcols1, libuuid1, login, mount, util-linux]
+    summary: "util-linux: util-linux: restricted bind mounts do not pin the source, allowing X-mount.owner/group/mode redire"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Flaws in mount helpers / nsenter (util-linux). The application never executes mount, nsenter or other util-linux tools; they are inert files in the base image.
+    mitigation: >-
+      Container runs as UID 10001 with all Linux capabilities dropped, allowPrivilegeEscalation=false (no_new_privs, so setuid binaries cannot gain privileges), read-only root filesystem and seccomp RuntimeDefault; no shell or exec endpoint is exposed. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
+  - id: CVE-2026-9538
+    control: container
+    severity: HIGH
+    packages: [perl-base]
+    summary: "perl-Archive-Tar: perl-Archive-Tar: Denial of Service via crafted tar header with large entry size"
+    reason: >-
+      No fixed Debian 13 package is available (Trivy: no fix version). Denial of service in perl Archive::Tar. The application never runs Perl or parses tar archives.
+    mitigation: >-
+      Perl is unused essential base-image content; non-root, read-only root filesystem. Re-scanned on every build; remove this exception as soon as a fixed base image is published.
+    owner: Project owner (PBL-III student)
+    approved_by: Project owner (PBL-III student) - explicit approval recorded 2026-11-14
+    approved_on: 2026-11-14
+    expires: 2026-12-31
