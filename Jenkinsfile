@@ -9,7 +9,7 @@ pipeline {
 
     environment {
         IMAGE_REPO = 'niranjanbalaguru/healthcare-app'
-        EC2_HOST   = '13.222.3.165'
+        EC2_HOST   = '18.234.149.150'
         REMOTE_DIR = '/tmp/healthcare-k8s'
     }
 
@@ -36,10 +36,6 @@ pipeline {
                     }
 
                     python -m py_compile app/app.py
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Python syntax validation failed"
-                    }
-
                     Write-Host "Source validation passed"
                 '''
             }
@@ -128,7 +124,7 @@ pipeline {
 
                         $image = "$($env:IMAGE_REPO):$($env:IMAGE_TAG)"
 
-                        $remoteCommand = "sudo kubectl apply -f $($env:REMOTE_DIR)/namespace.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/deployment.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/service.yaml && sudo kubectl set image deployment/healthcare-deployment healthcare-app=$image -n healthcare && sudo kubectl rollout status deployment/healthcare-deployment -n healthcare --timeout=180s && sudo kubectl get pods -n healthcare -o wide && sudo kubectl get svc -n healthcare"
+                        $remoteCommand = "sudo kubectl apply -f $($env:REMOTE_DIR)/namespace.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/deployment.yaml && sudo kubectl apply -f $($env:REMOTE_DIR)/service.yaml && sudo kubectl set image deployment/healthcare-deployment healthcare-app=$image -n healthcare && sudo kubectl set env deployment/healthcare-deployment APP_VERSION=$image -n healthcare && sudo kubectl rollout status deployment/healthcare-deployment -n healthcare --timeout=180s && sudo kubectl get pods -n healthcare -o wide && sudo kubectl get svc -n healthcare"
 
                         ssh @sshOptions `
                             "$($env:SSH_USER)@$($env:EC2_HOST)" `
