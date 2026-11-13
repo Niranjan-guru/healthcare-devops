@@ -1,0 +1,21 @@
+# Internal-only preview Service (ClusterIP, never exposed outside the
+# cluster). The pipeline points it at the candidate (inactive) environment so
+# the new version can be tested before any production traffic reaches it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: healthcare-preview-service
+  namespace: healthcare
+  labels:
+    app: healthcare
+    role: preview
+spec:
+  type: ClusterIP
+  selector:
+    app: healthcare
+    environment: green
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 5000
