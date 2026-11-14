@@ -191,8 +191,13 @@ def make_handler(panel: Panel, port: int):
     class Handler(BaseHTTPRequestHandler):
         server_version = "BlueGreenPanel"
 
-        def log_message(self, fmt, *args):  # keep the console quiet and token-free
-            sys.stderr.write("[panel] " + (fmt % args) + "\n")
+        def log_message(self, fmt, *args):
+            # Keep the console readable during a demo: log actions and errors,
+            # not the status/live polls the page makes every few seconds.
+            line = fmt % args
+            if self.command == "GET" and '" 200 ' in line:
+                return
+            sys.stderr.write("[panel] " + line + "\n")
 
         def _send(self, status, body: bytes, ctype: str):
             self.send_response(status)
