@@ -5,15 +5,26 @@ All data is synthetic and held in memory only; this is not production
 healthcare software and must never be used with real patient data.
 """
 import os
+import socket
 import threading
 from datetime import date, datetime, timezone
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 
 APP_VERSION = os.getenv("APP_VERSION", "1.0.0")
+# Set by Kubernetes (downward API): the pod's `environment` label
+# (blue / green / rolling) and the pod name. Used by the frontend banner to
+# show which deployment served the request.
+DEPLOY_ENVIRONMENT = os.getenv("DEPLOY_ENVIRONMENT", "local")
+POD_NAME = os.getenv("POD_NAME") or socket.gethostname()
+
+# The HTML page needs its own same-origin scripts and styles; everything else
+# stays locked down. No inline script/style, no third-party origins.
+HTML_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+            "img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
 # Security response headers for a JSON-only API (Activity 9, OWASP ZAP
 # findings 10021 / 10038): no MIME sniffing, no framing, no active content.
@@ -59,8 +70,20 @@ appointments = []
 _appointments_lock = threading.Lock()
 
 
+def _wants_html():
+    # Browsers ask for text/html; API clients, curl and tests (Accept: */* or
+    # application/json) keep receiving the JSON metadata.
+    best = request.accept_mimetypes.best_match(["application/json", "text/html"])
+    return best == "text/html" and request.accept_mimetypes[best] > request.accept_mimetypes["application/json"]
+
+
 @app.route("/", methods=["GET"])
 def home():
+    if _wants_html():
+        response = app.make_response(render_template(
+            "index.html", version=APP_VERSION, environment=DEPLOY_ENVIRONMENT))
+        response.headers["Content-Security-Policy"] = HTML_CSP
+        return response
     return jsonify({
         "application": "Healthcare Appointment management",
         "version": APP_VERSION,
@@ -68,10 +91,22 @@ def home():
         "endpoints": [
             "/health",
             "/version",
+            "/api/deployment",
             "/api/doctors",
             "/api/appointments"
         ]
     })
+
+
+@app.route("/api/deployment", methods=["GET"])
+def deployment():
+    """Which release and environment served this request (used by the UI banner)."""
+    return jsonify({
+        "version": APP_VERSION,
+        "environment": DEPLOY_ENVIRONMENT,
+        "pod": POD_NAME,
+        "served_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }), 200
 
 
 @app.route("/health", methods=["GET"])

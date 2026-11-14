@@ -1,20 +1,3 @@
-// Activity 7 - Healthcare CI/CD pipeline (rolling update), job Healthcare-CI-CD.
-//
-// Agent: Windows Jenkins controller (service account LocalSystem) with
-// Docker Desktop and Windows OpenSSH. Target: K3s on an EC2 instance,
-// driven remotely over SSH with `sudo kubectl` (the K3s API port is never
-// exposed and no kubeconfig leaves the EC2 host).
-//
-// Stage logic lives in ci/stages.ps1 + ci/lib.ps1 (Windows side, shared
-// with the Activity 8 and 9 pipelines) and ci/remote/*.sh (EC2 side).
-//
-// This pipeline deploys the `rolling` environment (Deployment
-// healthcare-deployment, Service healthcare-rolling-service). The production
-// Service healthcare-service is owned by the Activity 8 blue-green pipeline.
-//
-// Note: PowerShell blocks use forward slashes in paths because Groovy
-// treats backslashes inside ''' strings as escape characters.
-
 pipeline {
     agent any
 
@@ -200,7 +183,7 @@ pipeline {
                             . "$env:WORKSPACE/ci/stages.ps1"
                             Initialize-SshSession
                             $result = Invoke-RemoteBundle -LocalDir (Join-Path $env:CI_TMP 'bundle') -Files (Get-BundleFiles smoke) `
-                                -EntryScript 'smoke-test.sh' -ScriptArguments @($env:IMAGE_TAG, $env:BUILD_NUMBER, 'healthcare-rolling-service')
+                                -EntryScript 'smoke-test.sh' -ScriptArguments @($env:IMAGE_TAG, $env:BUILD_NUMBER, 'healthcare-rolling-service', 'rolling')
                             Assert-Success $result 'Application smoke tests failed'
                         '''
                     }

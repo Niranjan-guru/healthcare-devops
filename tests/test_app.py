@@ -1,4 +1,6 @@
 """Functional tests for the synthetic healthcare appointment API."""
+import pathlib
+
 import pytest
 
 import app as app_module
@@ -22,7 +24,7 @@ def test_root_endpoint_describes_application(client):
     assert body["application"] == "Healthcare Appointment management"
     assert body["version"] == app_module.APP_VERSION
     assert set(body["endpoints"]) == {
-        "/health", "/version", "/api/doctors", "/api/appointments"
+        "/health", "/version", "/api/deployment", "/api/doctors", "/api/appointments"
     }
 
 
@@ -146,7 +148,7 @@ def test_unknown_doctor_returns_404(client):
 
 # ---- Activity 9: security hardening (DAST / SAST findings) -------------------
 
-@pytest.mark.parametrize("path", ["/", "/health", "/version", "/api/doctors", "/api/appointments"])
+@pytest.mark.parametrize("path", ["/", "/health", "/version", "/api/deployment", "/api/doctors", "/api/appointments"])
 def test_security_headers_present(client, path):
     response = client.get(path)
     assert response.headers["X-Content-Type-Options"] == "nosniff"
@@ -185,3 +187,75 @@ def test_unexpected_errors_do_not_leak_details(client, monkeypatch):
     assert response.status_code == 500
     assert response.get_json() == {"error": "Internal Server Error", "status": 500}
     assert b"internal secret detail" not in response.data
+
+
+# ---- Frontend and deployment banner -------------------------------------------
+
+BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
+
+def test_browser_gets_html_frontend(client):
+    response = client.get("/", headers={"Accept": BROWSER_ACCEPT})
+    assert response.status_code == 200
+    assert response.mimetype == "text/html"
+    page = response.get_data(as_text=True)
+    assert "Healthcare Appointment Desk" in page
+    assert "synthetic data only" in page
+    assert "/static/js/app.js" in page and "/static/css/app.css" in page
+
+
+def test_html_csp_allows_only_same_origin_and_no_inline(client):
+    csp = client.get("/", headers={"Accept": BROWSER_ACCEPT}).headers["Content-Security-Policy"]
+    assert "script-src 'self'" in csp and "style-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "unsafe-inline" not in csp and "unsafe-eval" not in csp and "*" not in csp
+
+
+@pytest.mark.parametrize("accept", [None, "application/json", "*/*"])
+def test_api_clients_still_get_json_metadata(client, accept):
+    headers = {"Accept": accept} if accept else {}
+    response = client.get("/", headers=headers)
+    assert response.mimetype == "application/json"
+    assert "/api/deployment" in response.get_json()["endpoints"]
+    assert response.headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
+
+
+def test_deployment_endpoint_reports_environment_version_and_pod(client):
+    response = client.get("/api/deployment")
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["version"] == app_module.APP_VERSION
+    assert body["environment"] == app_module.DEPLOY_ENVIRONMENT
+    assert body["pod"]
+    assert body["served_at"].endswith("+00:00")
+
+
+def test_deployment_environment_comes_from_kubernetes_label_env(monkeypatch):
+    import importlib
+
+    monkeypatch.setenv("DEPLOY_ENVIRONMENT", "green")
+    monkeypatch.setenv("POD_NAME", "healthcare-green-abc12")
+    reloaded = importlib.reload(app_module)
+    try:
+        with reloaded.app.test_client() as test_client:
+            body = test_client.get("/api/deployment").get_json()
+        assert body["environment"] == "green" and body["pod"] == "healthcare-green-abc12"
+    finally:
+        monkeypatch.delenv("DEPLOY_ENVIRONMENT")
+        monkeypatch.delenv("POD_NAME")
+        importlib.reload(app_module)
+
+
+@pytest.mark.parametrize("path, mimetype", [("/static/js/app.js", "text/javascript"), ("/static/css/app.css", "text/css")])
+def test_static_assets_served(client, path, mimetype):
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.mimetype == mimetype
+    response.close()
+
+
+def test_frontend_never_renders_data_with_innerhtml():
+    # Patient names are user input: the UI must only use textContent.
+    script = (pathlib.Path(app_module.__file__).parent / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "innerHTML" not in script and "outerHTML" not in script and "insertAdjacentHTML" not in script
+    assert "eval(" not in script

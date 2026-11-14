@@ -4,17 +4,20 @@
 # ClusterIP for internal services), so no inbound port has to be opened to
 # the internet. Uses synthetic data only.
 #
-# Usage: smoke-test.sh <workdir> <expected-version> <build-number> <service-name>
+# Usage: smoke-test.sh <workdir> <expected-version> <build-number> <service-name> [expected-environment]
+#   expected-environment (blue | green | rolling) additionally asserts which
+#   environment served the requests, via /api/deployment.
 set -Eeuo pipefail
 
-if [[ $# -ne 4 ]]; then
-  echo "usage: $0 <workdir> <expected-version> <build-number> <service-name>" >&2
+if [[ $# -ne 4 && $# -ne 5 ]]; then
+  echo "usage: $0 <workdir> <expected-version> <build-number> <service-name> [expected-environment]" >&2
   exit 2
 fi
 WORKDIR=$1
 VERSION=$2
 BUILD=$3
 SERVICE=$4
+EXPECTED_ENV=${5:-}
 
 svc_type=$(sudo -n kubectl -n healthcare get service "$SERVICE" -o jsonpath='{.spec.type}') \
   || { echo "[smoke] ERROR: service $SERVICE not found" >&2; exit 1; }
@@ -75,6 +78,25 @@ for i in $(seq 1 10); do
   fi
 done
 [[ "$version_ok" -eq 1 ]] && pass "/version -> 200 '$VERSION' on 10/10 requests"
+
+# ---- Frontend --------------------------------------------------------------
+STATUS=$(curl -sS -o "$BODY" -w '%{http_code}' --max-time 10 -H 'Accept: text/html' "$BASE/") || STATUS=000
+if [[ "$STATUS" == "200" ]] && grep -q 'Healthcare Appointment Desk' "$BODY" && grep -q '/static/js/app.js' "$BODY"; then
+  pass "/ (browser) -> 200 HTML frontend"
+else
+  fail "/ (browser) -> $STATUS, frontend page not served"
+fi
+for asset in /static/js/app.js /static/css/app.css; do
+  request GET "$asset"
+  [[ "$STATUS" == "200" ]] && pass "$asset -> 200" || fail "$asset -> $STATUS"
+done
+
+request GET /api/deployment
+if [[ -n "$EXPECTED_ENV" ]]; then
+  [[ "$STATUS" == "200" ]] && json_check "d['version'] == version and d['environment'] == '$EXPECTED_ENV' and d['pod'].startswith('healthcare-')"     && pass "/api/deployment -> served by $EXPECTED_ENV ($VERSION)" || fail "/api/deployment -> $STATUS $(cat "$BODY" 2>/dev/null) (expected environment $EXPECTED_ENV)"
+else
+  [[ "$STATUS" == "200" ]] && json_check "d['version'] == version"     && pass "/api/deployment -> 200 version $VERSION" || fail "/api/deployment -> $STATUS $(cat "$BODY" 2>/dev/null)"
+fi
 
 request GET /api/doctors
 [[ "$STATUS" == "200" ]] && json_check '[x["id"] for x in d] == [1, 2, 3] and {x["specialty"] for x in d} == {"Cardiology", "Dermatology", "Neurology"}' \
