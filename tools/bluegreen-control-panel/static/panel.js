@@ -29,9 +29,15 @@ async function refreshLive() {
   }
 }
 
+let statusSeq = 0;
+
 async function refreshStatus() {
+  // Status queries take a few seconds (SSH); ignore any answer that is
+  // older than the newest request so a slow poll cannot show stale state.
+  const seq = ++statusSeq;
   try {
     const body = await getJson("/api/status");
+    if (seq !== statusSeq) return;
     const c = body.cluster || {};
     if (c.error) { $("status").textContent = c.error; return; }
     production = c.production;
@@ -64,6 +70,11 @@ async function turnOn(env) {
     });
     const body = await response.json();
     result.className = "result " + (body.ok ? "ok" : "err");
+    if (body.ok) {
+      production = env;
+      const other = env === "blue" ? "Green" : "Blue";
+      $("status").textContent = `${env === "blue" ? "Blue" : "Green"}: ON (live)   |   ${other}: OFF`;
+    }
     $("result-title").textContent = body.ok
       ? `Done in ${body.seconds}s - the website now runs on ${env.toUpperCase()}. Click "Open the website".`
       : "Switch failed - the website was left as it was.";
@@ -77,6 +88,7 @@ async function turnOn(env) {
     $("result-title").textContent = "Could not reach the panel server.";
   } finally {
     switching = false;
+    setButtons();          // update the buttons immediately, not after the next poll
     await refreshStatus();
     await refreshLive();
   }

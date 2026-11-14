@@ -161,10 +161,13 @@ class Panel:
             return 409, {"ok": False, "steps": ["A switch is already running."]}
         started = time.time()
         try:
+            # Send raw LF bytes: in text mode Windows would turn "\n" into
+            # "\r\n" on stdin, and bash rejects "pipefail\r" (exit 2).
             r = subprocess.run(self._ssh() + [f"{EC2_USER}@{EC2_HOST}", "bash", "-s", "--", target],
-                               input=SWITCH_SCRIPT.replace("\r\n", "\n"), capture_output=True, text=True, timeout=240)
-            steps = [l.split(": ", 1)[1] for l in r.stdout.splitlines() if l.startswith(("STEP: ", "ERROR: "))]
-            ok = r.returncode == 0 and any(l.startswith("DONE: ") for l in r.stdout.splitlines())
+                               input=SWITCH_SCRIPT.replace("\r\n", "\n").encode("utf-8"), capture_output=True, timeout=240)
+            out = r.stdout.decode("utf-8", errors="replace")
+            steps = [l.split(": ", 1)[1] for l in out.splitlines() if l.startswith(("STEP: ", "ERROR: "))]
+            ok = r.returncode == 0 and any(l.startswith("DONE: ") for l in out.splitlines())
             if not steps:
                 steps = ["The switch did not complete (ssh exit %d)." % r.returncode]
         except subprocess.TimeoutExpired:

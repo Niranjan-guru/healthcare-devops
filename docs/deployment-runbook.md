@@ -51,16 +51,18 @@ curl -s http://127.0.0.1:30060/version     # production
 curl -s http://127.0.0.1:30061/version     # Activity 7 rolling environment
 ```
 
-### Showcase: turn environments ON/OFF from the control panel
+### Showcase: fast Blue/Green switch from the demo panel
 
 ```powershell
 cd healthcare-devops\tools\bluegreen-control-panel
 python server.py --key ..\..\devops-lab-key.pem      # http://127.0.0.1:8090/
 ```
 
-Press *Turn ON Blue* or *Turn ON Green* (keep "Stop the other environment" ticked
-to stop the previous one). Open the hospital app at http://127.0.0.1:18060/ in a
-second window to watch the banner colour change.
+Click *Turn ON Blue* or *Turn ON Green* (5-20 s), then *Open the website*: the page
+says "You are on Blue environment" / "You are on Green environment". The panel
+switches directly on the node (start target if OFF, wait Ready, patch selector,
+verify, turn the other OFF) and only between versions already released by the
+Jenkins pipeline. See tools/bluegreen-control-panel/README.md.
 
 ### Manual rollback
 

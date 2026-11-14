@@ -1,20 +1,14 @@
-# Blue-Green Control Panel (local showcase)
+# Blue-Green Demo Panel (local)
 
-A small local web page for demonstrating Activity 8: **Turn ON Blue** /
-**Turn ON Green** buttons, a live view of which environment serves
-production, and the status of the Jenkins pipeline.
+A tiny local page for demonstrating Blue-Green deployment live:
 
-The panel never changes the cluster itself. Every button runs the
-`Healthcare-Blue-Green` Jenkins job, so each switch goes through the same
-gates as a release:
+1. Click **Turn ON Blue** → after a few seconds click **Open the website** →
+   the page says **"You are on Blue environment"** (blue banner).
+2. Click **Turn ON Green** → **Open the website** →
+   **"You are on Green environment"** (green banner).
 
-1. start the chosen environment with its **recorded verified image**
-   (`ACTION=activate`, `TARGET_ENV=blue|green`),
-2. wait until it is Ready, check probes, restarts and the version of every pod,
-3. smoke-test it through the internal preview Service,
-4. switch the production Service selector and verify production,
-5. if "Stop the other environment" is ticked (`STOP_PREVIOUS=true`), turn the
-   previous environment **OFF** (scale to 0). Rollback can restart it.
+A switch takes about **5–20 seconds** (longer only when the environment
+first has to be started from OFF).
 
 ## Run
 
@@ -23,29 +17,34 @@ cd healthcare-devops\tools\bluegreen-control-panel
 python server.py --key ..\..\devops-lab-key.pem
 ```
 
-Open <http://127.0.0.1:8090/>. The hospital app (production) is available
-through the panel's SSH tunnel at <http://127.0.0.1:18060/>.
+* Panel: <http://127.0.0.1:8090/>
+* Website (production): <http://127.0.0.1:18060/> – also opened by the
+  "Open the website" link. Keep the panel running while you demo; it provides
+  the connection to the website.
 
-Requirements: Python 3.9+, Windows OpenSSH (`ssh`, `ssh-keyscan`,
-`ssh-keygen`), the Jenkins API token in `%USERPROFILE%\.jenkins-api-token`
-(one line `username:token`), and SSH access to the EC2 node.
+Requirements: Python 3.9+, Windows OpenSSH, and SSH access to the EC2 node
+with your key. No Jenkins token is needed.
+
+## What "Turn ON" does
+
+On the K3s node (over SSH):
+
+1. takes the shared namespace deploy lock (refuses if a Jenkins deployment is running),
+2. starts the chosen environment if it is OFF and waits until its pods are Ready,
+3. points the production Service `healthcare-service` at it,
+4. checks that the website really answers from that environment (otherwise
+   switches straight back),
+5. turns the other environment OFF (0 pods).
+
+It only switches to a version that previously passed a full release through
+the `Healthcare-Blue-Green` Jenkins pipeline (the environment's current image
+must equal its recorded verified image). To put a **new** version into an
+environment, run that Jenkins job (`ACTION=deploy`) once; the panel then
+switches between the released versions instantly.
 
 ## Security
 
-* Listens on `127.0.0.1` only; the SSH tunnel also binds to `127.0.0.1`.
-* The Jenkins token stays in the server process; it is never sent to the browser.
-* POST requests require the per-session token embedded in the page **and** a
-  same-origin `Origin` header (other websites cannot trigger builds).
-* SSH uses the same pinned host-key fingerprint as the pipelines
-  (`StrictHostKeyChecking=yes`).
-* The hospital app has no Kubernetes permissions; nothing in production can
-  switch traffic.
-
-## What you see
-
-* A large banner coloured **blue** or **green** with the version and pod that
-  answered the last request, plus a timeline of the last 30 responses - the
-  colour flips at the moment the production Service is switched.
-* One card per environment: LIVE / ON (idle) / OFF, ready pods and the
-  verified version.
-* The latest Jenkins build with a link to its console.
+* Listens on `127.0.0.1` only; the website tunnel also binds to `127.0.0.1`.
+* Buttons work only from this page (per-session token + same-origin check).
+* SSH uses the pinned host-key fingerprint (`StrictHostKeyChecking=yes`).
+* The website itself has no Kubernetes permissions.
