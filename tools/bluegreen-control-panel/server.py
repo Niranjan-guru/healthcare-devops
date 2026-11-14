@@ -76,6 +76,11 @@ print(json.dumps(out))
 class Panel:
     def __init__(self, key: pathlib.Path, jenkins: str, token_file: pathlib.Path):
         self.key = key
+        # Only plain http(s) to a host is accepted, so urllib can never be
+        # pointed at file:// or other schemes (Semgrep dynamic-urllib-use).
+        parsed = urllib.parse.urlparse(jenkins)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise SystemExit(f"--jenkins must be an http(s) URL, got {jenkins!r}")
         self.jenkins = jenkins.rstrip("/")
         raw = token_file.read_text(encoding="utf-8").strip()
         if not re.fullmatch(r"[^:\s]+:\S+", raw):
