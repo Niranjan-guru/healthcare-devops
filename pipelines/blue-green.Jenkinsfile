@@ -11,15 +11,28 @@
 //   6. rolls back automatically if any post-switch check fails
 // ACTION=rollback switches production back to the recorded previous
 // environment (only if it still runs the recorded, previously verified image).
+// ACTION=activate turns TARGET_ENV ON with its recorded verified image and
+// switches traffic to it through the same validation gates as a release.
+// STOP_PREVIOUS=true turns the previously live environment OFF (scale to 0)
+// once the new one is verified and monitored.
 //
 // Shares ci/stages.ps1, ci/lib.ps1 and ci/remote/*.sh with Activity 7.
+
+// A release switches traffic: a new deploy, or turning an environment ON.
+def isRelease() {
+    return params.ACTION == 'deploy' || (params.ACTION == 'activate' && env.BG_NOOP != 'true')
+}
 
 pipeline {
     agent any
 
     parameters {
-        choice(name: 'ACTION', choices: ['deploy', 'rollback'],
-               description: 'deploy = build, test and release to the inactive environment, then switch traffic. rollback = switch production back to the previous environment.')
+        choice(name: 'ACTION', choices: ['deploy', 'rollback', 'activate'],
+               description: 'deploy = build, test and release to the inactive environment, then switch traffic. rollback = switch production back to the previous environment. activate = turn TARGET_ENV ON (its last verified version) and switch traffic to it.')
+        choice(name: 'TARGET_ENV', choices: ['blue', 'green'],
+               description: 'ACTION=activate only: the environment to turn ON.')
+        booleanParam(name: 'STOP_PREVIOUS', defaultValue: false,
+               description: 'deploy/activate: after the new environment is verified, turn the previous one OFF (scale to 0). Rollback can still restart it.')
         string(name: 'REPLICAS', defaultValue: '2', trim: true,
                description: 'Replicas for the candidate environment (1-4). Capacity is checked before deploying.')
         string(name: 'MONITOR_SECONDS', defaultValue: '60', trim: true,
@@ -72,7 +85,9 @@ pipeline {
                     env.CI_TMP      = "${env.WORKSPACE}@tmp\\ci-${env.BUILD_NUMBER}"
                     env.LOCK_HOLDER = "Healthcare-Blue-Green-${env.BUILD_NUMBER}"
                     currentBuild.displayName = "#${env.BUILD_NUMBER} ${params.ACTION} ${env.GIT_COMMIT_SHORT}"
-                    currentBuild.description = params.ACTION == 'deploy' ? "image ${env.IMAGE_TAG}" : "rollback: ${params.ROLLBACK_REASON}"
+                    currentBuild.description = params.ACTION == 'deploy' ? "image ${env.IMAGE_TAG}" :
+                        (params.ACTION == 'activate' ? "turn ON ${params.TARGET_ENV}" : "rollback: ${params.ROLLBACK_REASON}")
+                    if (params.ACTION == 'activate') { currentBuild.displayName = "#${env.BUILD_NUMBER} activate ${params.TARGET_ENV}" }
                 }
                 powershell label: 'Verify commit and prepare private temp dir', script: '''
                     . "$env:WORKSPACE/ci/stages.ps1"
@@ -172,6 +187,9 @@ pipeline {
                             if ($env:ACTION -eq 'deploy') {
                                 $r = Invoke-RemoteBundle -LocalDir $bundle -Files (Get-BundleFiles bluegreen) -EntryScript 'bluegreen.sh' `
                                     -ScriptArguments @('prepare', $env:LOCK_HOLDER, $env:REPLICAS)
+                            } elseif ($env:ACTION -eq 'activate') {
+                                $r = Invoke-RemoteBundle -LocalDir $bundle -Files (Get-BundleFiles bluegreen) -EntryScript 'bluegreen.sh' `
+                                    -ScriptArguments @('prepare', $env:LOCK_HOLDER, $env:REPLICAS, $env:TARGET_ENV)
                             } else {
                                 $r = Invoke-RemoteBundle -LocalDir $bundle -Files (Get-BundleFiles lock) -EntryScript 'ns-lock.sh' `
                                     -ScriptArguments @('acquire', $env:LOCK_HOLDER)
@@ -179,27 +197,67 @@ pipeline {
                             # The lock may have been taken even if a later check failed.
                             Write-Utf8NoBomLf -Path (Join-Path $env:CI_TMP 'lock-attempted') -Text 'true'
                             Assert-Success $r 'Preparing the blue-green release failed'
-                            $state = ($r.Output | Where-Object { $_ -match '^BG_(ACTIVE|TARGET)=[a-z]+$' }) -join "`n"
+                            $state = ($r.Output | Where-Object { $_ -match '^BG_(ACTIVE|TARGET|ALREADY_ACTIVE)=[a-z]+$' }) -join "`n"
                             Write-Utf8NoBomLf -Path (Join-Path $env:CI_TMP 'bg-state.txt') -Text $state
                         '''
                         script {
-                            if (params.ACTION == 'deploy') {
+                            if (params.ACTION in ['deploy', 'activate']) {
                                 // Plain string parsing: regex Matchers are not serializable under CPS.
                                 String active = ''
                                 String target = ''
+                                boolean already = false
                                 for (String line : readFile("${env.CI_TMP}\\bg-state.txt").split('\n')) {
                                     if (line.startsWith('BG_ACTIVE=')) { active = line.substring(10).trim() }
                                     if (line.startsWith('BG_TARGET=')) { target = line.substring(10).trim() }
+                                    if (line.trim() == 'BG_ALREADY_ACTIVE=true') { already = true }
                                 }
                                 if (!active || !target) { error('Could not determine the active/target environments') }
                                 env.BG_ACTIVE = active
                                 env.BG_TARGET = target
-                                if (!(env.BG_TARGET in ['blue', 'green']) || env.BG_TARGET == env.BG_ACTIVE) {
+                                if (!(env.BG_TARGET in ['blue', 'green'])) { error("Invalid target '${env.BG_TARGET}'") }
+                                if (already && params.ACTION == 'activate') {
+                                    env.BG_NOOP = 'true'
+                                    echo "${env.BG_TARGET} is already ON and serving production - nothing to do."
+                                    currentBuild.description = "${env.BG_TARGET} already ON"
+                                } else if (env.BG_TARGET == env.BG_ACTIVE) {
                                     error("Invalid target '${env.BG_TARGET}' for active '${env.BG_ACTIVE}'")
+                                } else if (params.ACTION == 'deploy') {
+                                    echo "Production is currently ${env.BG_ACTIVE}; releasing ${env.IMAGE_TAG} to ${env.BG_TARGET}."
+                                    currentBuild.description = "${env.IMAGE_TAG}: ${env.BG_ACTIVE} -> ${env.BG_TARGET}"
+                                } else {
+                                    echo "Production is currently ${env.BG_ACTIVE}; turning ON ${env.BG_TARGET}."
                                 }
-                                echo "Production is currently ${env.BG_ACTIVE}; releasing ${env.IMAGE_TAG} to ${env.BG_TARGET}."
-                                currentBuild.description = "${env.IMAGE_TAG}: ${env.BG_ACTIVE} -> ${env.BG_TARGET}"
                             }
+                        }
+                    }
+                }
+                stage('Start Target Environment') {
+                    when { expression { params.ACTION == 'activate' && env.BG_NOOP != 'true' } }
+                    options { timeout(time: 10, unit: 'MINUTES') }
+                    steps {
+                        powershell label: 'Turn the target ON with its recorded verified image', script: '''
+                            . "$env:WORKSPACE/ci/stages.ps1"
+                            Initialize-SshSession
+                            $r = Invoke-RemoteBundle -LocalDir (Join-Path $env:CI_TMP 'bundle') -Files (Get-BundleFiles bluegreen) -EntryScript 'bluegreen.sh' `
+                                -ScriptArguments @('start', $env:BG_TARGET, $env:REPLICAS)
+                            Assert-Success $r "Turning ON $env:BG_TARGET failed - production unchanged"
+                            $state = ($r.Output | Where-Object { $_ -match '^BG_(IMAGE|VERSION)=' }) -join "`n"
+                            Write-Utf8NoBomLf -Path (Join-Path $env:CI_TMP 'bg-start.txt') -Text $state
+                        '''
+                        script {
+                            String image = ''
+                            String version = ''
+                            for (String line : readFile("${env.CI_TMP}\\bg-start.txt").split('\n')) {
+                                if (line.startsWith('BG_IMAGE=')) { image = line.substring(9).trim() }
+                                if (line.startsWith('BG_VERSION=')) { version = line.substring(11).trim() }
+                            }
+                            if (!(image ==~ /niranjanbalaguru\/healthcare-app:[A-Za-z0-9._-]+/) || !(version ==~ /[A-Za-z0-9._-]+/)) {
+                                error("Unexpected verified image/version for ${env.BG_TARGET}: '${image}' / '${version}'")
+                            }
+                            // From here on the shared stages validate and switch to this exact image.
+                            env.IMAGE = image
+                            env.IMAGE_TAG = version
+                            currentBuild.description = "turn ON ${env.BG_TARGET} (${version}): ${env.BG_ACTIVE} -> ${env.BG_TARGET}"
                         }
                     }
                 }
@@ -246,7 +304,7 @@ pipeline {
                     }
                 }
                 stage('Validate Inactive Environment') {
-                    when { expression { params.ACTION == 'deploy' } }
+                    when { expression { isRelease() } }
                     options { timeout(time: 10, unit: 'MINUTES') }
                     steps {
                         powershell label: 'Probe stability, restarts, per-pod version, preview endpoints', script: '''
@@ -259,20 +317,20 @@ pipeline {
                     }
                 }
                 stage('Run Pre-Switch Smoke Tests') {
-                    when { expression { params.ACTION == 'deploy' } }
+                    when { expression { isRelease() } }
                     options { timeout(time: 5, unit: 'MINUTES') }
                     steps {
                         powershell label: 'Smoke tests through the internal preview Service', script: '''
                             . "$env:WORKSPACE/ci/stages.ps1"
                             Initialize-SshSession
                             $r = Invoke-RemoteBundle -LocalDir (Join-Path $env:CI_TMP 'bundle') -Files (Get-BundleFiles smoke) -EntryScript 'smoke-test.sh' `
-                                -ScriptArguments @($env:IMAGE_TAG, $env:BUILD_NUMBER, 'healthcare-preview-service')
+                                -ScriptArguments @($env:IMAGE_TAG, $env:BUILD_NUMBER, 'healthcare-preview-service', $env:BG_TARGET)
                             Assert-Success $r "Pre-switch smoke tests against $env:BG_TARGET failed - promotion blocked"
                         '''
                     }
                 }
                 stage('Switch Production Service') {
-                    when { expression { params.ACTION == 'deploy' } }
+                    when { expression { isRelease() } }
                     options { timeout(time: 5, unit: 'MINUTES') }
                     steps {
                         script { env.SWITCH_ATTEMPTED = 'true' }
@@ -286,20 +344,20 @@ pipeline {
                     }
                 }
                 stage('Verify Production Traffic') {
-                    when { expression { params.ACTION == 'deploy' } }
+                    when { expression { isRelease() } }
                     options { timeout(time: 5, unit: 'MINUTES') }
                     steps {
                         powershell label: 'Smoke tests through the production Service', script: '''
                             . "$env:WORKSPACE/ci/stages.ps1"
                             Initialize-SshSession
                             $r = Invoke-RemoteBundle -LocalDir (Join-Path $env:CI_TMP 'bundle') -Files (Get-BundleFiles smoke) -EntryScript 'smoke-test.sh' `
-                                -ScriptArguments @($env:IMAGE_TAG, $env:BUILD_NUMBER, 'healthcare-service')
+                                -ScriptArguments @($env:IMAGE_TAG, $env:BUILD_NUMBER, 'healthcare-service', $env:BG_TARGET)
                             Assert-Success $r 'Production smoke tests failed after the switch'
                         '''
                     }
                 }
                 stage('Monitor New Production Version') {
-                    when { expression { params.ACTION == 'deploy' } }
+                    when { expression { isRelease() } }
                     options { timeout(time: 15, unit: 'MINUTES') }
                     steps {
                         powershell label: 'Bounded post-switch monitoring', script: '''
@@ -316,6 +374,25 @@ pipeline {
                         '''
                     }
                 }
+                stage('Stop Previous Environment') {
+                    when { expression { params.STOP_PREVIOUS && isRelease() } }
+                    options { timeout(time: 5, unit: 'MINUTES') }
+                    steps {
+                        script {
+                            if (!(env.BG_ACTIVE in ['blue', 'green'])) {
+                                echo "Previous production environment was '${env.BG_ACTIVE}' (owned by Activity 7 or none); it is not stopped by this pipeline."
+                            } else {
+                                powershell label: 'Turn the previous environment OFF (scale to 0)', script: '''
+                                    . "$env:WORKSPACE/ci/stages.ps1"
+                                    Initialize-SshSession
+                                    $r = Invoke-RemoteBundle -LocalDir (Join-Path $env:CI_TMP 'bundle') -Files (Get-BundleFiles bluegreen) -EntryScript 'bluegreen.sh' `
+                                        -ScriptArguments @('stop', $env:BG_ACTIVE, $env:BUILD_NUMBER)
+                                    Assert-Success $r "Turning OFF $env:BG_ACTIVE failed"
+                                '''
+                            }
+                        }
+                    }
+                }
                 stage('Manual Rollback') {
                     when { expression { params.ACTION == 'rollback' } }
                     options { timeout(time: 10, unit: 'MINUTES') }
@@ -324,7 +401,7 @@ pipeline {
                             . "$env:WORKSPACE/ci/stages.ps1"
                             Initialize-SshSession
                             $r = Invoke-RemoteBundle -LocalDir (Join-Path $env:CI_TMP 'bundle') -Files (Get-BundleFiles bluegreen) -EntryScript 'bluegreen.sh' `
-                                -ScriptArguments @('rollback', $env:BUILD_NUMBER, $env:ROLLBACK_REASON)
+                                -ScriptArguments @('rollback', $env:BUILD_NUMBER, $env:ROLLBACK_REASON, $env:REPLICAS)
                             Assert-Success $r 'Manual rollback failed'
                         '''
                     }

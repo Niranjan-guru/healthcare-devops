@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Healthcare Appointment Desk</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body data-env="{{ environment }}">
+  <header class="deploy-bar" id="deploy-bar" aria-live="polite">
+    <div class="deploy-inner">
+      <span class="env-dot" aria-hidden="true"></span>
+      <span>Serving from <strong id="env-name">{{ environment|upper }}</strong> environment</span>
+      <span class="sep">·</span>
+      <span>version <strong id="env-version">{{ version }}</strong></span>
+      <span class="sep">·</span>
+      <span>pod <code id="env-pod">-</code></span>
+      <span class="live" id="live-state">live</span>
+    </div>
+  </header>
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <main class="page">
+    <section class="hero">
+      <div>
+        <h1>Healthcare Appointment Desk</h1>
+        <p class="sub">Book outpatient consultations with our specialists.</p>
+      </div>
+      <p class="notice">Demonstration system — synthetic data only. Do not enter real patient information.</p>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Our doctors</h2>
+        <ul class="doctors" id="doctors"><li class="muted">Loading…</li></ul>
+      </article>
+
+      <article class="card">
+        <h2>Book an appointment</h2>
+        <form id="booking" novalidate>
+          <label for="doctor">Doctor</label>
+          <select id="doctor" name="doctor" required></select>
+
+          <label for="patient">Patient name (synthetic)</label>
+          <input id="patient" name="patient" type="text" maxlength="100" required placeholder="e.g. Test Patient A">
+
+          <label for="date">Appointment date</label>
+          <input id="date" name="date" type="date" required>
+
+          <button type="submit" id="book-btn">Book appointment</button>
+          <p class="result" id="booking-result" role="alert"></p>
+        </form>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Scheduled appointments</h2>
+        <button type="button" class="secondary" id="refresh-btn">Refresh</button>
+      </div>
+      <p class="muted small">Appointments are kept in memory by the serving instance, so each pod has its own list.</p>
+      <table class="table">
+        <thead><tr><th>#</th><th>Patient</th><th>Doctor</th><th>Date</th><th>Status</th></tr></thead>
+        <tbody id="appointments"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Academic DevOps project (PBL-III) · Flask + Gunicorn on Kubernetes · not production healthcare software
+  </footer>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

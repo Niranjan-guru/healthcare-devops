@@ -24,6 +24,11 @@ paths:
       summary: Deployed version
       responses:
         "200": { description: Version }
+  /api/deployment:
+    get:
+      summary: Environment, version and pod that served the request
+      responses:
+        "200": { description: Deployment information }
   /api/doctors:
     get:
       summary: List synthetic doctors

@@ -23,3 +23,4 @@ Jenkinsfile
 ci/
 # ...except the security gate, which the test stage unit-tests
 !ci/security/
+tools/

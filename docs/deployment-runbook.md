@@ -35,6 +35,8 @@ Jenkins → `Healthcare-Blue-Green` → **Build with Parameters**:
 | `REPLICAS` | `2` | 1–4; node capacity is checked first |
 | `MONITOR_SECONDS` | `60` | Post-switch monitoring window |
 | `ROLLBACK_REASON` | – | Used with `ACTION=rollback` |
+| `TARGET_ENV` | – | With `ACTION=activate`: environment to turn ON |
+| `STOP_PREVIOUS` | `false` | Turn the previous environment OFF after a verified switch |
 | `SIMULATE_FAILED_VALIDATION` | `false` | Negative test: breaks the candidate's readiness probe |
 | `SIMULATE_POST_SWITCH_FAILURE` | `false` | Negative test: forces post-switch monitoring to fail → automatic rollback |
 
@@ -48,6 +50,17 @@ sudo kubectl -n healthcare get service healthcare-service -o json | python3 -c \
 curl -s http://127.0.0.1:30060/version     # production
 curl -s http://127.0.0.1:30061/version     # Activity 7 rolling environment
 ```
+
+### Showcase: turn environments ON/OFF from the control panel
+
+```powershell
+cd healthcare-devops\tools\bluegreen-control-panel
+python server.py --key ..\..\devops-lab-key.pem      # http://127.0.0.1:8090/
+```
+
+Press *Turn ON Blue* or *Turn ON Green* (keep "Stop the other environment" ticked
+to stop the previous one). Open the hospital app at http://127.0.0.1:18060/ in a
+second window to watch the banner colour change.
 
 ### Manual rollback
 

@@ -192,3 +192,10 @@ def test_container_read_only_root_with_tmp_scratch(name):
     assert {"name": "tmp", "mountPath": "/tmp"} in container["volumeMounts"]
     tmp = next(v for v in pod["volumes"] if v["name"] == "tmp")
     assert tmp["emptyDir"]["medium"] == "Memory"
+
+
+@pytest.mark.parametrize("name", ALL_DEPLOYMENTS)
+def test_frontend_environment_comes_from_downward_api(name):
+    env = {e["name"]: e for e in load(name)["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert env["DEPLOY_ENVIRONMENT"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.labels['environment']"
+    assert env["POD_NAME"]["valueFrom"]["fieldRef"]["fieldPath"] == "metadata.name"

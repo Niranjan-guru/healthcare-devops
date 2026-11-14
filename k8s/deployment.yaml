@@ -60,6 +60,16 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            # Downward API: lets the frontend show which environment (the
+            # pod's own `environment` label) and pod served each request.
+            - name: DEPLOY_ENVIRONMENT
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['environment']
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
 
           resources:
             requests:
