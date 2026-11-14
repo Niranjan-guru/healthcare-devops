@@ -9,13 +9,16 @@
 # active environment, and Service annotations record the previous one.
 #
 # Usage: bluegreen.sh <workdir> <mode> [args...]
-#   prepare  <holder> <replicas>                  lock, adopt legacy production, choose target
+#   prepare  <holder> <replicas> [target]         lock, adopt legacy production, choose (or force) target
+#   start    <target> <replicas>                  turn an environment ON with its recorded verified image
+#   stop     <env> <build>                        turn a non-live environment OFF (scale to 0)
 #   deploy   <target> <image> <build> <commit>    apply candidate + point preview Service at it
 #   wait     <target> <image> <replicas>          bounded rollout wait; undo candidate on failure
 #   validate <target> <image> <version> <replicas> probes, restarts, per-pod version, preview endpoints
 #   switch   <target> <image> <version> <build> <commit> <replicas>
 #   monitor  <target> <version> <seconds> <replicas>
-#   rollback <build> <reason-token>               switch back to the recorded previous environment
+#   rollback <build> <reason-token> [replicas]    switch back to the recorded previous environment
+#                                                 (restarting it first if it was turned OFF)
 #   state                                         print deployment state as JSON
 #   unlock   <holder>                             release the namespace deploy lock
 set -Eeuo pipefail
@@ -65,7 +68,8 @@ verify_production_version() {
 }
 
 do_prepare() {
-  local holder=$1 replicas=$2 active target existing new_pods rolling_ready
+  # prepare <holder> <replicas> [forced-target]  (forced target = ACTION=activate)
+  local holder=$1 replicas=$2 forced=${3:-} active target existing new_pods rolling_ready
   require_node_ready
   lock_acquire "$holder"
 
@@ -95,7 +99,14 @@ do_prepare() {
     active=rolling
   fi
 
-  if [[ "$active" == "blue" ]]; then target=green; else target=blue; fi
+  if [[ -n "$forced" ]]; then
+    require_target "$forced"; target=$forced
+    if [[ "$target" == "$active" ]]; then
+      log "$target is already the active production environment; nothing to switch"
+      echo "BG_ACTIVE=$active"; echo "BG_TARGET=$target"; echo "BG_ALREADY_ACTIVE=true"
+      return 0
+    fi
+  elif [[ "$active" == "blue" ]]; then target=green; else target=blue; fi
   log "current production environment: $active (image $( [[ -n "$(deploy_of "$active")" ]] && deploy_image "$(deploy_of "$active")" || echo none))"
   log "candidate (inactive) environment: $target"
 
@@ -187,9 +198,12 @@ do_switch() {
     "$A/active-environment=$target" "$A/active-image=$image" "$A/active-version=$version" \
     "$A/previous-environment=$prev" "$A/previous-image=$prev_image" "$A/previous-version=$prev_version" \
     "$A/last-operation=promote" "$A/last-build=$build" "$A/last-commit=$commit" \
-    "$A/last-change-utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null || fail "recording switch annotations failed"
+    "$A/last-change-utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$A/rollback-reason-" >/dev/null || fail "recording switch annotations failed"
+  # verified-image records exactly which image passed validation, so a later
+  # "turn ON" (start) can never bring up anything unverified.
   kc -n "$NS" annotate deployment "$(deploy_of "$target")" --overwrite \
-    "$A/verified=true" "$A/verified-version=$version" >/dev/null || fail "marking $target verified failed"
+    "$A/verified=true" "$A/verified-version=$version" "$A/verified-image=$image" "$A/stopped-" >/dev/null \
+    || fail "marking $target verified failed"
 
   [[ "$(active_env)" == "$target" ]] || fail "production selector is not environment=$target after patch"
   verify_service_endpoints "$PROD_SVC" "$(selector_of "$target")" "$replicas"
@@ -218,8 +232,66 @@ do_monitor() {
   log "post-switch monitoring passed"
 }
 
+dep_annotation() {  # dep_annotation <deployment> <key>
+  kc -n "$NS" get deployment "$1" -o jsonpath="{.metadata.annotations.${A//./\\.}/$2}"
+}
+
+# start <target> <replicas>: turn an environment ON again with the image that
+# was verified when it last passed validation (ACTION=activate).
+do_start() {
+  local target=$1 replicas=$2 deploy vimg vver live current
+  require_target "$target"
+  [[ "$(active_env)" != "$target" ]] || fail "$target is already the active environment"
+  deploy=$(deploy_of "$target")
+  kc -n "$NS" get deployment "$deploy" >/dev/null 2>&1 || fail "$deploy does not exist; run a normal deploy first"
+  vimg=$(dep_annotation "$deploy" verified-image); vver=$(dep_annotation "$deploy" verified-version)
+  [[ -n "$vimg" && -n "$vver" ]] || fail "$deploy has no verified image recorded; it must pass a full blue-green release before it can be turned ON"
+  live=$(deploy_image "$deploy")
+  [[ "$live" == "$vimg" ]] || fail "$deploy currently has image $live, not its verified image $vimg; refusing to turn it ON"
+  current=$(kc -n "$NS" get deployment "$deploy" -o jsonpath='{.spec.replicas}')
+  log "turning ON $target: $deploy image $vimg (verified version $vver), replicas $current -> $replicas"
+  if [[ "$current" != "$replicas" ]]; then
+    kc -n "$NS" scale "deployment/$deploy" --replicas="$replicas" >/dev/null || fail "scaling $deploy failed"
+  fi
+  kc -n "$NS" annotate deployment "$deploy" --overwrite "$A/stopped-" >/dev/null || fail "annotating $deploy failed"
+  kc -n "$NS" patch service "$PREVIEW_SVC" --type merge \
+    -p "{\"spec\":{\"selector\":{\"app\":\"healthcare\",\"environment\":\"$target\"}}}" >/dev/null \
+    || fail "pointing preview Service at $target failed"
+  if ! wait_rollout "$deploy" "$ROLLOUT_TIMEOUT"; then
+    log "$target did not become Ready; scaling it back to $current"
+    kc -n "$NS" scale "deployment/$deploy" --replicas="$current" >/dev/null \
+      || log "WARNING: could not scale $deploy back to $current replicas"
+    fail "$target did not become Ready; production unchanged ($(active_env))"
+  fi
+  verify_deployment "$deploy" "$vimg" "$replicas"
+  wait_pod_count "$(selector_of "$target")" "$replicas"
+  verify_pods "$(selector_of "$target")" "$vimg" "$replicas"
+  log "$target is ON with $replicas Ready pods; production still routes to $(active_env)"
+  echo "BG_IMAGE=$vimg"
+  echo "BG_VERSION=$vver"
+}
+
+# stop <env> <build>: turn an environment OFF (scale to 0). Never the live one.
+do_stop() {
+  local envname=$1 build=$2 deploy attempt left
+  require_target "$envname"
+  [[ "$(active_env)" != "$envname" ]] || fail "refusing to stop $envname: it is the LIVE production environment"
+  deploy=$(deploy_of "$envname")
+  log "turning OFF $envname ($deploy) - production routes to $(active_env)"
+  kc -n "$NS" scale "deployment/$deploy" --replicas=0 >/dev/null || fail "scaling $deploy to 0 failed"
+  kc -n "$NS" annotate deployment "$deploy" --overwrite "$A/stopped=true" "$A/stopped-by-build=$build" >/dev/null \
+    || fail "annotating $deploy failed"
+  for attempt in $(seq 1 45); do
+    left=$(kc -n "$NS" get pods -l "$(selector_of "$envname")" --no-headers 2>/dev/null | wc -l)
+    [[ "$left" -eq 0 ]] && break
+    sleep 2
+  done
+  [[ "$left" -eq 0 ]] || fail "$envname still has $left pod(s) after 90s"
+  log "$envname is OFF (0 pods); it keeps its verified image $(dep_annotation "$deploy" verified-image) for a later turn-ON or rollback"
+}
+
 do_rollback() {
-  local build=$1 reason=$2 active prev prev_deploy prev_image prev_version desired ready live_image got
+  local build=$1 reason=$2 replicas=${3:-2} active prev prev_deploy prev_image prev_version desired ready live_image got
   active=$(active_env)
   prev=$(annotation previous-environment)
   prev_image=$(annotation previous-image)
@@ -237,6 +309,15 @@ do_rollback() {
   [[ "$live_image" == "$prev_image" ]] \
     || fail "$prev_deploy now runs $live_image, not the recorded previous production image $prev_image; refusing to roll back to an unverified image"
   read -r desired ready <<< "$(kc -n "$NS" get deployment "$prev_deploy" -o jsonpath='{.spec.replicas} {.status.readyReplicas}')"
+  if [[ "$desired" == "0" ]]; then
+    # The previous environment was turned OFF; bring it back with its
+    # (just verified) recorded image before switching traffic to it.
+    log "$prev was turned OFF; starting it with $replicas replicas before rolling back"
+    kc -n "$NS" scale "deployment/$prev_deploy" --replicas="$replicas" >/dev/null || fail "scaling $prev_deploy failed"
+    kc -n "$NS" annotate deployment "$prev_deploy" --overwrite "$A/stopped-" >/dev/null || fail "annotating $prev_deploy failed"
+    wait_rollout "$prev_deploy" "$ROLLOUT_TIMEOUT" || fail "$prev did not become Ready; production unchanged"
+    read -r desired ready <<< "$(kc -n "$NS" get deployment "$prev_deploy" -o jsonpath='{.spec.replicas} {.status.readyReplicas}')"
+  fi
   [[ "${ready:-0}" -ge 1 && "${ready:-0}" -eq "$desired" ]] || fail "$prev_deploy is not fully Ready (ready=${ready:-0}/$desired)"
   verify_pods "$(selector_of "$prev")" "$prev_image" "$desired"
   got=$(first_pod_version "$(selector_of "$prev")")
@@ -280,6 +361,8 @@ case "$MODE" in
   switch)   do_switch "$@" ;;
   monitor)  do_monitor "$@" ;;
   rollback) do_rollback "$@" ;;
+  start)    do_start "$@" ;;
+  stop)     do_stop "$@" ;;
   state)    do_state ;;
   unlock)   lock_release "$1" ;;
   *) echo "unknown mode: $MODE" >&2; exit 2 ;;

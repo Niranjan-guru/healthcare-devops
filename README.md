@@ -18,7 +18,8 @@ cluster on AWS EC2.
 
 | Endpoint | Description |
 |---|---|
-| `GET /` | Application metadata |
+| `GET /` | Browser: the **hospital web frontend** (doctors, booking, appointments, live deployment banner). API clients: JSON metadata |
+| `GET /api/deployment` | Environment (blue / green / rolling), version and pod that served the request |
 | `GET /health` | Health check (used by Docker and Kubernetes probes) |
 | `GET /version` | Deployed version (= image tag) |
 | `GET /api/doctors` | Synthetic doctors |
@@ -54,6 +55,16 @@ docs/                    Documentation (below)
 * [Security policy and exceptions](docs/security-policy.md)
 * [Testing and validation](docs/testing-and-validation.md)
 * [Deployment runbook](docs/deployment-runbook.md)
+
+## Frontends
+
+* **Hospital frontend** – served by the application itself at `/` (see `app/templates`,
+  `app/static`). The coloured banner shows which environment, version and pod served
+  the page and refreshes every 3 s, so blue/green switches are visible live.
+* **Blue-Green control panel** – a local-only tool in
+  [`tools/bluegreen-control-panel`](tools/bluegreen-control-panel/README.md) with
+  *Turn ON Blue / Turn ON Green* buttons that run the Blue-Green pipeline
+  (`ACTION=activate`, optional `STOP_PREVIOUS`).
 
 ## Run the tests locally
 

@@ -74,6 +74,22 @@ flowchart TB
 | Record Deployment State | JSON + text state archived as build artifacts |
 | Stage `post` | `failure` after a switch → **automatic rollback**; `cleanup` → release lock |
 
+## 3a. Turning environments ON and OFF (showcase)
+
+| Parameter | Effect |
+|---|---|
+| `ACTION=activate`, `TARGET_ENV=blue\|green` | Turn the environment ON with the image recorded as **verified** (`healthcare.pbl/verified-image`, set when it last passed a promotion); then the same validate → pre-switch smoke → switch → verify → monitor stages as a release. If the target is already live, the build is a no-op. |
+| `STOP_PREVIOUS=true` | After the new environment is verified and monitored, scale the previous environment to 0 (`healthcare.pbl/stopped=true`). Never the live one; never the Activity 7 `rolling` environment. |
+| `ACTION=rollback` | If the previous environment was turned OFF, it is first restarted with its verified image, then traffic switches back. |
+
+`start` refuses an environment whose current image differs from its verified
+image or that was never verified, so turning something ON can never bring up an
+unverified build. The hospital frontend's banner and the local control panel
+(`tools/bluegreen-control-panel`) make the switch visible: the colour flips from
+blue to green (or back) at the moment the selector changes. Smoke tests now also
+check the frontend (HTML page, JS, CSS) and assert, through `/api/deployment`,
+which environment served the requests.
+
 ## 4. Resource management
 
 Node: 2 vCPU, 1909 Mi allocatable. Each pod requests 50m CPU / 64 Mi
