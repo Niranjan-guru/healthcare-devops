@@ -259,3 +259,19 @@ def test_frontend_never_renders_data_with_innerhtml():
     script = (pathlib.Path(app_module.__file__).parent / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "innerHTML" not in script and "outerHTML" not in script and "insertAdjacentHTML" not in script
     assert "eval(" not in script
+
+
+@pytest.mark.parametrize("env, word", [("blue", "Blue"), ("green", "Green"), ("rolling", "Rolling")])
+def test_page_says_which_environment_it_is_on(monkeypatch, env, word):
+    import importlib
+
+    monkeypatch.setenv("DEPLOY_ENVIRONMENT", env)
+    reloaded = importlib.reload(app_module)
+    try:
+        with reloaded.app.test_client() as test_client:
+            page = test_client.get("/", headers={"Accept": BROWSER_ACCEPT}).get_data(as_text=True)
+        assert f'You are on <strong id="env-word">{word}</strong> environment' in page
+        assert f'data-env="{env}"' in page
+    finally:
+        monkeypatch.delenv("DEPLOY_ENVIRONMENT")
+        importlib.reload(app_module)

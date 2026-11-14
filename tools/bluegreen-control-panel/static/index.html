@@ -4,62 +4,33 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="panel-token" content="__CSRF_TOKEN__">
-  <title>Blue-Green Control Panel</title>
+  <title>Blue-Green Demo</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/panel.css">
 </head>
 <body>
-  <header class="top">
-    <h1>Blue-Green Control Panel</h1>
-    <p>Healthcare Appointment Desk · Activity 8 showcase · local only</p>
-  </header>
-
   <main>
-    <section class="live" id="live" data-env="unknown">
-      <div class="live-label">Production is now served by</div>
-      <div class="live-env" id="live-env">…</div>
-      <div class="live-meta">version <strong id="live-version">-</strong> · pod <code id="live-pod">-</code></div>
-      <div class="timeline" id="timeline" aria-label="Last responses"></div>
-      <a class="open-app" id="open-app" href="#" target="_blank" rel="noopener">Open the hospital app ↗</a>
+    <h1>Blue-Green Deployment Demo</h1>
+
+    <section class="now" id="now" data-env="unknown">
+      <span class="now-label">The website is running on</span>
+      <span class="now-env" id="now-env">…</span>
+      <span class="now-version" id="now-version"></span>
     </section>
 
-    <section class="envs">
-      <article class="env-card" id="card-blue" data-env="blue">
-        <header><span class="dot"></span><h2>BLUE</h2><span class="tag" id="tag-blue">-</span></header>
-        <dl>
-          <dt>Status</dt><dd id="status-blue">-</dd>
-          <dt>Pods ready</dt><dd id="pods-blue">-</dd>
-          <dt>Verified version</dt><dd id="version-blue">-</dd>
-        </dl>
-        <button type="button" class="on" id="btn-blue">Turn ON Blue</button>
-      </article>
-
-      <article class="env-card" id="card-green" data-env="green">
-        <header><span class="dot"></span><h2>GREEN</h2><span class="tag" id="tag-green">-</span></header>
-        <dl>
-          <dt>Status</dt><dd id="status-green">-</dd>
-          <dt>Pods ready</dt><dd id="pods-green">-</dd>
-          <dt>Verified version</dt><dd id="version-green">-</dd>
-        </dl>
-        <button type="button" class="on" id="btn-green">Turn ON Green</button>
-      </article>
+    <section class="buttons">
+      <button type="button" class="blue" id="btn-blue">Turn ON Blue</button>
+      <button type="button" class="green" id="btn-green">Turn ON Green</button>
     </section>
 
-    <section class="controls">
-      <label class="check"><input type="checkbox" id="stop-previous" checked> Stop the other environment after the switch</label>
-      <div class="buttons">
-        <button type="button" class="secondary" id="btn-deploy">Deploy new version to the inactive environment</button>
-        <button type="button" class="secondary" id="btn-rollback">Roll back to previous</button>
-      </div>
-      <p class="hint">Every action runs the <a id="jenkins-link" href="#" target="_blank" rel="noopener">Healthcare-Blue-Green</a> Jenkins pipeline:
-        the environment is started, health- and smoke-tested, and only then does production traffic switch.</p>
+    <a class="open" id="open" href="http://127.0.0.1:18060/" target="_blank" rel="noopener">Open the website ↗</a>
+
+    <section class="result" id="result" role="status" hidden>
+      <div class="result-title" id="result-title"></div>
+      <ol id="steps"></ol>
     </section>
 
-    <section class="build">
-      <h3>Jenkins</h3>
-      <div id="build">-</div>
-      <div class="message" id="message" role="status"></div>
-    </section>
+    <p class="status" id="status">Blue: - &nbsp;·&nbsp; Green: -</p>
   </main>
   <script src="/static/panel.js"></script>
 </body>

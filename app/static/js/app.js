@@ -41,6 +41,7 @@ async function refreshDeployment() {
     }
     document.body.dataset.env = body.environment;
     $("env-name").textContent = body.environment.toUpperCase();
+    $("env-word").textContent = body.environment.charAt(0).toUpperCase() + body.environment.slice(1);
     $("env-version").textContent = body.version;
     $("env-pod").textContent = body.pod;
     $("live-state").textContent = `live · ${new Date().toLocaleTimeString()}`;
